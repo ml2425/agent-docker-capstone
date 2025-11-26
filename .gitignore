@@ -1,0 +1,30 @@
+# === Project-specific ignores ===
+MERGE.md
+docs/BRANCHES.md
+contents/
+
+# === Dependency & build artifacts (good practice) ===
+.venv/
+venv/
+env/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+
+# === Tooling & editor state ===
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# === Environment / secrets ===
+.env
+.env.*
+
+# === Local databases & logs ===
+*.db
+*.sqlite
+*.log
+

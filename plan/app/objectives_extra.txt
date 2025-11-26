@@ -1,0 +1,122 @@
+## 🧠 Knowledge Base & MCQ Generation System Specifications
+
+This document outlines the core strategies and implementation details for the **Knowledge Base (KB) Fact Curation**, the **MCQ Generation Pipeline**, the **Distractor Strategy**, and the **Visual Kernel/Image Pipeline**.
+
+---
+
+## 1. Triplet Editing and Fact Curation
+
+### 1.1 Triplet Editor Interface (Implementation Requirement)
+
+The UI for reviewing new facts must be an **interactive editor**, not a simple approval modal.
+
+**Input (from Fact Extraction Agent):**
+
+```json
+{
+  "subject": "Warfarin",
+  "action": "inhibits",
+  "object": "Vitamin K Epoxide Reductase (VKOR)",
+  "source_id": "Pubmed ID: 31415926"
+}
+Editor Functionality:
+
+The UI displays subject, action, and object as editable text fields.
+
+The human reviewer edits fields as needed.
+
+On Approve, the edited triplet is written to the Approved Triplet KB.
+
+1.2 Guidance for Consistent Curation
+To ensure standardised entries, reviewers must follow the formatting consistency rules:
+
+Field	Good Input Examples	Bad Input Examples
+Subject	Warfarin; Aspirin; Left Ventricular Hypertrophy (LVH)	A drug; The patient's heart
+Action	inhibits; causes; is the treatment for; is a sign of	makes it stop; should be used for
+Object	Vitamin K Epoxide Reductase (VKOR); platelet aggregation	the bad enzyme; the sickness
+
+Curation Instruction:
+“Keep terms specific (e.g., ‘Drug X’), and actions definitive (e.g., ‘inhibits’). Avoid pronouns or vague language.”
+
+2. Distractor Generation Strategy: “Plausible but Incorrect” Swap
+High-quality distractors should use facts that are true in isolation but incorrect for the specific question context.
+
+2.1 Strategy Overview: Plausible Swaps
+Assume the Correct Answer Triplet (C-TRIPLET):
+
+makefile
+Copy code
+Subject: Amoxicillin  
+Action: inhibits  
+Object: bacterial cell wall synthesis
+The MCQ Generation Agent queries the KB to generate Plausible Swap Triplets (P-SWAP TRIPLETS). If the KB does not return enough high-quality candidates, the agent must fall back to an LLM-backed curated taxonomy (e.g., common differentials or mechanism pairs) so that distractors remain medically plausible even when KB coverage is thin.
+
+KB Query Type	Query Focus	Example Distractor	Rationale
+KB Query 1	Same subject, different action/object	inhibits protein synthesis	True statement about subject but wrong MOA
+KB Query 2	Same action/object, different subject	Ceftriaxone	Another drug with similar MOA
+KB Query 3	Incorrect but medically plausible relation	inhibits DNA gyrase	True fact but from wrong antibiotic class
+
+2.2 MCQ Generation Agent – Final Task
+The agent must convert the P-SWAP TRIPLETS into natural-language distractor options.
+
+Instruction to LLM:
+
+“Use the C-TRIPLET as the correct answer. Convert each P-SWAP TRIPLET into a cohesive distractor. Each distractor must be medically plausible and factually true in isolation but incorrect for this specific question.”
+
+3. Image Production and Visual Kernel Management
+A controlled pipeline ensures medically accurate, cost-managed visual content.
+
+3.1 Visual Kernel Draft (VKD) – Constraints
+The MCQ Generation Agent outputs a Visual Kernel Draft (VKD) consisting of:
+
+A simple descriptive text prompt
+
+A reference tag linking the prompt to the MCQ
+
+Allowed concepts include:
+imaging, histopathology, simple diagrams (LLMs perform reliably here).
+
+3.2 Visual Refiner Agent (Two Tasks)
+Input:
+
+VKD (draft visual prompt)
+
+C-TRIPLET
+
+Task 1 — Prompt Refinement → Optimized Visual Prompt (OVP):
+Add specifics such as:
+
+“high-resolution”
+
+“axial CT slice”
+
+“medical textbook style”
+
+Task 2 — Verifiability Check via Visual Triplet and Schema Validation:
+Generate a Visual Triplet (Subject–Action–Object) that defines the visual fact depicted and run the same schema validator used by the MCQ Agent to ensure entities/relations comply with `schema.yaml`.
+
+Output:
+
+Optimized Visual Prompt (OVP) — includes validator status/result
+
+Visual Triplet — marked valid only if schema constraints pass
+
+3.3 Human-in-the-Loop (HITL) Gate
+This is the final quality and cost checkpoint.
+
+Review Stage:
+
+Show the user the MCQ, the OVP, and the Visual Triplet.
+
+User Actions:
+
+Edit/Amend OVP and Visual Triplet.
+
+Approve or Reject.
+
+Approval Rule:
+Only approved OVP + Visual Triplet are stored.
+
+Image Generation Action:
+A separate explicit button triggers image creation using the stored OVP.
+The resulting Image URL is then stored with the MCQ.

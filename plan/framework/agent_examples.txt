@@ -1,0 +1,141 @@
+Agent powered by an LLM
+pythonagent = Agent(
+    name="mcq_generator",
+    model=Gemini(model="gemini-2.5-flash-lite"),
+    instruction="Generate multiple choice questions on given topic",
+    tools=[google_search]
+)
+Sequential agents
+python# MCQ Pipeline: Research → Generate → Validate
+research_agent = Agent(name="ResearchAgent", instruction="Find facts on {topic}", tools=[google_search], output_key="facts")
+generator_agent = Agent(name="GeneratorAgent", instruction="Create MCQs from: {facts}", output_key="mcqs")
+validator_agent = Agent(name="ValidatorAgent", instruction="Check MCQs for quality: {mcqs}", output_key="validated_mcqs")
+
+pipeline = SequentialAgent(name="MCQPipeline", sub_agents=[research_agent, generator_agent, validator_agent])
+Parallel agents
+python# Generate MCQs for multiple topics simultaneously
+topic1_agent = Agent(name="Topic1MCQ", instruction="Generate MCQs on biology", output_key="bio_mcqs")
+topic2_agent = Agent(name="Topic2MCQ", instruction="Generate MCQs on chemistry", output_key="chem_mcqs")
+topic3_agent = Agent(name="Topic3MCQ", instruction="Generate MCQs on physics", output_key="phys_mcqs")
+aggregator = Agent(name="Aggregator", instruction="Combine: {bio_mcqs}, {chem_mcqs}, {phys_mcqs}")
+
+parallel_system = ParallelAgent(name="MultiTopicMCQ", sub_agents=[topic1_agent, topic2_agent, topic3_agent])
+root = SequentialAgent(sub_agents=[parallel_system, aggregator])
+Loop agents
+python# Iterative MCQ refinement until quality approved
+writer = Agent(name="MCQWriter", instruction="Generate MCQs on {topic}", output_key="current_mcqs")
+critic = Agent(name="Critic", instruction="Review: {current_mcqs}. If good, say 'APPROVED', else suggest fixes", output_key="critique")
+
+def exit_loop():
+    return {"status": "approved"}
+
+refiner = Agent(name="Refiner", instruction="If {critique}=='APPROVED' call exit_loop, else improve {current_mcqs}", tools=[FunctionTool(exit_loop)], output_key="current_mcqs")
+
+loop = LoopAgent(name="MCQRefinementLoop", sub_agents=[critic, refiner], max_iterations=3)
+pipeline = SequentialAgent(sub_agents=[writer, loop])
+MCP tools
+python# Connect to external MCP server for MCQ content
+mcp_toolset = McpToolset(
+    connection_params=StdioConnectionParams(
+        server_params=StdioServerParameters(
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-everything"]
+        )
+    )
+)
+agent = Agent(name="MCQAgent", tools=[mcp_toolset])
+Custom function tools
+pythondef get_difficulty_level(topic: str) -> dict:
+    """Determines MCQ difficulty for topic"""
+    levels = {"algebra": "medium", "calculus": "hard"}
+    return {"difficulty": levels.get(topic, "easy")}
+
+agent = Agent(name="MCQAgent", tools=[get_difficulty_level])
+Built-in tools - Google Search
+pythonagent = Agent(
+    name="MCQResearcher",
+    instruction="Search current facts for MCQ generation",
+    tools=[google_search]
+)
+Built-in tools - Code Execution
+pythoncalculation_agent = LlmAgent(
+    name="MCQCalculator",
+    instruction="Generate Python code to calculate MCQ statistics",
+    code_executor=BuiltInCodeExecutor()
+)
+OpenAPI tools
+python# Auto-generate tools from API spec
+openapi_tool = OpenAPIToolset(spec_url="https://api.example.com/mcq-bank/openapi.json")
+agent = Agent(name="MCQAgent", tools=[openapi_tool])
+Long-running operations (pause/resume)
+pythondef approve_mcq_batch(batch_size: int, tool_context: ToolContext) -> dict:
+    """Pauses for human approval if batch > 10"""
+    if batch_size <= 10:
+        return {"status": "approved"}
+    
+    if not tool_context.tool_confirmation:  # First call - pause
+        tool_context.request_confirmation(hint=f"Approve {batch_size} MCQs?")
+        return {"status": "pending"}
+    
+    if tool_context.tool_confirmation.confirmed:  # Resume - approved
+        return {"status": "approved"}
+    return {"status": "rejected"}
+
+agent = LlmAgent(tools=[FunctionTool(approve_mcq_batch)])
+app = App(root_agent=agent, resumability_config=ResumabilityConfig(is_resumable=True))
+runner = Runner(app=app, session_service=session_service)
+Sessions - InMemorySessionService
+pythonsession_service = InMemorySessionService()
+runner = Runner(agent=agent, app_name="MCQApp", session_service=session_service)
+
+# Run with session
+await session_service.create_session(app_name="MCQApp", user_id="user1", session_id="session1")
+await runner.run_async(user_id="user1", session_id="session1", new_message=query)
+Sessions - State management
+pythondef save_difficulty(tool_context: ToolContext, level: str) -> dict:
+    """Store MCQ difficulty in session state"""
+    tool_context.state["user:difficulty"] = level
+    return {"status": "saved"}
+
+def get_difficulty(tool_context: ToolContext) -> dict:
+    """Retrieve MCQ difficulty from session state"""
+    level = tool_context.state.get("user:difficulty", "medium")
+    return {"difficulty": level}
+
+agent = LlmAgent(tools=[save_difficulty, get_difficulty])
+Long term memory - InMemoryMemoryService
+pythonmemory_service = InMemoryMemoryService()
+runner = Runner(agent=agent, session_service=session_service, memory_service=memory_service)
+
+# Store session to memory
+session = await session_service.get_session(app_name="MCQApp", user_id="user1", session_id="s1")
+await memory_service.add_session_to_memory(session)
+
+# Retrieve from memory
+search_result = await memory_service.search_memory(app_name="MCQApp", user_id="user1", query="user preferences")
+
+# Agent with memory tools
+agent = LlmAgent(tools=[load_memory])  # Reactive: agent decides when to search
+# OR
+agent = LlmAgent(tools=[preload_memory])  # Proactive: always loads memory
+Context engineering - Context compaction
+pythonapp = App(
+    name="MCQApp",
+    root_agent=agent,
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=5,  # Compact every 5 turns
+        overlap_size=2  # Keep 2 previous turns
+    )
+)
+runner = Runner(app=app, session_service=DatabaseSessionService(db_url="sqlite:///mcq.db"))
+
+# Agent for Session Persistence (Short-term context/conversation history)
+db_url = "sqlite:///my_agent_sessions.db"
+session_service = DatabaseSessionService(db_url=db_url)
+# You would then pass this session_service to your Runner
+
+# ALong-Term Memory Persistence (Cross-session knowledge)
+from google.adk.memory import SqliteMemoryService
+
+memory_service = SqliteMemoryService(db_path='./agent_memory.db')
+# You would then configure your agent to use this memory_service

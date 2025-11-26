@@ -1,0 +1,20 @@
+# Core orchestration stack
+google-adk>=1.19.0
+chainlit>=1.0.0
+
+# Data modeling and validation
+pydantic>=2.7.4
+pydantic-settings>=2.4.0
+
+# Persistence layer
+sqlalchemy>=2.0.32
+
+# Utilities and integrations
+python-dotenv>=1.0.1
+requests>=2.32.3
+pyyaml>=6.0.1
+openai>=1.40.0
+
+# Testing
+pytest>=8.3.2
+

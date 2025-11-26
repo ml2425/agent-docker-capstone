@@ -1,0 +1,85 @@
+# Medical Ontology Schema for Knowledge Extraction and MCQ Generation
+
+# --- ENTITY TYPES ---
+# The core concepts recognized by the system.
+entity_types:
+  - DISORDER             # A disease, syndrome, or injury.
+  - MICROBE              # Pathogens (bacteria, viruses, fungi, parasites).
+  - DRUG                 # Pharmacological agents.
+  - PROCEDURE            # Surgical or interventional actions.
+  - INVESTIGATION        # Diagnostic tests (labs, imaging, procedures).
+  - RISK_FACTOR          # A condition or factor predisposing to a disorder.
+  - THERAPY              # Non-drug, non-procedural treatment (e.g., physical, radiation).
+  - MANAGEMENT_PLAN      # High-level non-interventional strategies (e.g., observation, counseling).
+  - SIGN                 # Objective, observable clinical findings (e.g., Fever, Tachycardia).
+  - SYMPTOM              # Subjective, patient-reported clinical findings (e.g., Headache, Nausea).
+  - CLINICAL_FEATURE     # Broad term for signs/symptoms or general presentation (Kept for compatibility).
+
+# --- RELATIONS (WITH CONSTRAINTS) ---
+# Defines the relationships between entities and imposes domain/range constraints.
+relations:
+  - id: CAUSES           # Direct etiologic relationship (e.g., Microbe causes Disorder).
+    domain: [MICROBE, DISORDER, DRUG, PROCEDURE]
+    range: [DISORDER, SIGN, SYMPTOM, CLINICAL_FEATURE]
+    enabled: true
+  
+  - id: TREATS           # Treatment relationship (e.g., Drug treats Disorder).
+    domain: [DRUG, PROCEDURE, THERAPY]
+    range: [DISORDER, SIGN, SYMPTOM] # Can treat symptoms as well (palliative care)
+    enabled: true
+
+  - id: PREDISPOSES      # Risk relationship (e.g., Smoking predisposes to Lung Cancer).
+    domain: [RISK_FACTOR]
+    range: [DISORDER]
+    enabled: true
+
+  - id: SUGGESTS         # Diagnostic inference (e.g., Finding suggests a Diagnosis).
+    domain: [INVESTIGATION, SIGN, SYMPTOM, CLINICAL_FEATURE]
+    range: [DISORDER] # DISORDER acts as the 'DIAGNOSIS' entity here for simplicity.
+    enabled: true
+
+  - id: INDICATES        # Management decision (e.g., Disorder indicates a Procedure).
+    domain: [DISORDER]
+    range: [DRUG, PROCEDURE, THERAPY, INVESTIGATION, MANAGEMENT_PLAN]
+    enabled: true
+
+  - id: SENSITIVE_TO     # Antimicrobial susceptibility.
+    domain: [MICROBE]
+    range: [DRUG]
+    enabled: false  # Feature-flagged for future use or specialized tasks.
+    
+  - id: TEMPORAL_ORDER   # Sequence of events (useful for vignette reasoning).
+    domain: [DISORDER, PROCEDURE, DRUG, SIGN, SYMPTOM]
+    range: [DISORDER, PROCEDURE, DRUG, SIGN, SYMPTOM]
+    attribute: "BEFORE/AFTER" # Requires an attribute to specify the order.
+    enabled: true
+
+# --- HIERARCHY / SUBCATEGORY ---
+# Note: In a true KG, this would be represented by an 'IS_A' relation. 
+# Here, we list entities that should support sub-typing for better reasoning.
+hierarchy_support:
+  - DISORDER
+  - DRUG
+  - PROCEDURE
+  - INVESTIGATION
+  - SIGN
+  - SYMPTOM
+
+# --- SECTION QUALITY TIERS ---
+# Guides the LLM on source reliability for extraction/citation.
+section_quality:
+  high: [RESULTS, METHODS, INTRODUCTION, CASE_PRESENTATION] # Case presentation for clinical features
+  medium: [BACKGROUND, RELATED_WORK]
+  low: [DISCUSSION, CONCLUSION, FUTURE_WORK] # Good for generating plausible distractors
+
+# --- MCQ VALIDATION RULES ---
+# Strict rules for ensuring high-quality, clinically relevant MCQs.
+mcq_validation:
+  num_options: 5
+  require_citation: true
+  require_vignette: true # New: Enforces a clinical scenario context.
+  checks:
+    type_compatibility: true    # Ensure answers/distractors match the question type (e.g., asking for a DRUG, options must be DRUGs).
+    evidence_leakage: true      # Prevent information in the question from directly giving away the answer.
+    uniqueness: true            # All options must be distinct.
+    plausibility: true          # New: Distractors must be medically plausible for the disorder or clinical context.

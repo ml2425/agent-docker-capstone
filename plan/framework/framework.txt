@@ -1,0 +1,15 @@
+Use google SDK framework for any of the following, where example is in agent_examples.txt
+Agent powered by an LLM
+Parallel agents
+Sequential agents
+Loop agents
+Tools, including:
+MCP
+custom tools
+built-in tools, such as Google Search or Code Execution
+OpenAPI tools
+Long-running operations (pause/resume agents)
+Sessions & Memory
+Sessions & state management (e.g. InMemorySessionService)
+Long term memory (e.g. Memory Bank)
+Context engineering (e.g. context compaction)

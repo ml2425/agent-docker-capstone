@@ -1,0 +1,229 @@
+## Project Documeents
+Your app requires the LLM to use three categories of documents:
+
+A. Project Purpose & Implementation Intent
+1. objectives.md
+
+Explains the full purpose of the app: to generate verifiable medical MCQs, enforce provenance, and use an agentic pipeline.
+
+
+2. objectives_extra.txt
+
+Contains implementation details for:
+
+Triplet editing behaviour
+
+Curation rules
+
+Distractor strategy (“plausible but incorrect swaps”)
+
+Visual Kernel → OVP → Human approval
+
+
+LLM instruction:
+ Use these documents to guide behaviour, validation rules, and interaction patterns.
+
+B. Agent Framework + Coding Patterns
+3. framework.txt
+
+Lists the agentic building blocks allowed:
+
+LLM Agents
+
+Parallel / Sequential Agents
+
+Loop Agents
+
+Tools (MCP, Custom, Built-in)
+
+Memory, sessions, compaction
+
+
+4. agent_examples.txt
+
+Contains Python examples using the Ask Framework, including:
+
+Agent powered by an LLM
+
+Sequential agents
+
+Parallel agents
+
+Loop agents
+
+MCP tools
+
+Custom tools
+
+Memory/state examples
+
+
+LLM instruction:
+ Select ANY 4 features from framework.txt.
+Examples from agent_examples.txt MUST be used as templates when writing code.
+
+C. Medical Schema for MCQ Generation
+5. schema.md
+
+Defines the medical entity types and relations for triplets and MCQ correctness:
+Examples:
+
+SYMPTOM → SUGGESTS → DISORDER
+
+MICROBE → CAUSES → DISORDER
+
+DISORDER → INDICATES → INVESTIGATION/PROCEDURE
+
+
+6. schema_examples.md
+
+Shows concrete examples of MCQs built using the schema, with:
+
+Vignettes
+
+Correct triplets
+
+Distractors
+
+Valid entity paths
+
+LLM instruction:
+ ALL triplets, MCQs, distractors, and Visual Triplets must follow this schema
+
+ 
+## How to use documents
+ Below is the explicit workflow the LLM MUST follow when implementing the system.
+
+STEP 0 — Read all documents and build internal mental model
+
+Before writing any code, the LLM must understand:
+
+Project aim → from objectives.md
+
+Behavioural rules → from objectives_extra.txt
+
+Permitted architectural patterns → from framework.txt
+
+Coding templates → from agent_examples.txt
+
+Knowledge schema → from schema.md
+
+Correct MCQ construction → from schema_examples.md
+
+STEP 1 — Choose the architectural components
+
+The LLM must select 4 features from framework.txt.
+Valid examples include:
+
+Sequential Agents
+
+Loop Agents
+
+Custom Tools
+
+Session Memory
+
+Context compaction
+
+MCP tools
+
+Use examples in agent_examples.txt as implementation templates.
+
+STEP 2 — Implement the Agentic Pipeline
+
+Pipeline is defined in detail in objectives.md.
+The required agents are:
+
+Source Ingestion Agent
+
+Fact Extraction Agent
+
+KB Management Agent
+
+MCQ Generation Agent
+
+Visual Refiner Agent
+
+Human-in-the-loop verifier (approval gate)
+
+Each agent uses Ask Framework patterns (sequential, loop, or tool-augmented) consistent with framework.txt.
+
+STEP 3 — Enforce Triplet Curation Behaviour
+
+Rules MUST follow objectives_extra.txt:
+
+Subject/action/object must match the allowed format
+
+Human can edit triplets only at review time
+
+No vague terms
+
+Example inputs MUST follow the good/bad examples table
+
+The LLM must build:
+
+A validator
+
+A UI schema for editing
+
+The data structure for storing approved triplets
+
+STEP 4 — MCQ Generation Must Follow Schema
+
+MCQs must follow logical paths defined in:
+
+schema.md
+
+schema_examples.md
+
+MCQ rules:
+
+Use a C-TRIPLET as the correct answer
+
+Distractors must follow the “plausible but incorrect swap” rules
+
+All options must be medically plausible
+
+Each MCQ must include provenance
+
+STEP 5 — Visual Kernel → OVP Pipeline
+
+As defined in objectives_extra.txt:
+
+MCQ agent generates a Visual Kernel Draft (VKD).
+
+Visual Refiner Agent produces:
+
+OVP (Optimized Visual Prompt)
+
+Visual Triplet
+
+Human approves or edits.
+
+Only on explicit request is the image generated.
+
+STEP 6 — Build the Python Codebase in Cursor
+
+Cursor should output files in:
+
+/app
+  /agents
+  /tools
+  /services
+  /db
+  /ui
+/docs
+tests/
+
+
+LLM should write modular Python using:
+
+Google Ask Framework
+
+Pydantic
+
+SQLite
+
+Simple JSON storage for KB
+
+Chainlit front-end if applicable

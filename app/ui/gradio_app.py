@@ -17,6 +17,7 @@ from app.services.kb_service import (
 from app.db.database import SessionLocal, init_db
 from app.db.models import Source, Triplet, MCQRecord
 from app.core.runner import runner, create_new_session, get_last_session
+from app.core.llm_manager import llm_manager
 import time
 
 
@@ -79,7 +80,11 @@ def update_article_dropdown(articles: List[Dict]) -> Tuple[gr.Dropdown, gr.Butto
     return gr.update(visible=False), gr.update(visible=False)
 
 
-async def handle_article_selection(article_choice: str, articles_state: List[Dict]) -> str:
+async def handle_article_selection(
+    article_choice: str,
+    articles_state: List[Dict],
+    model_id: str,
+) -> str:
     """Ingest selected PubMed article"""
     if not article_choice or not articles_state:
         return "❌ No article selected"
@@ -104,7 +109,8 @@ async def handle_article_selection(article_choice: str, articles_state: List[Dic
             result = await run_agent(
                 new_message=f"Extract triplets from source: {source_dict['source_id']}",
                 user_id=DEFAULT_USER_ID,
-                session_id=session_id
+                session_id=session_id,
+                model_id=model_id,
             )
             
             # Store extracted triplets
@@ -133,7 +139,7 @@ async def handle_article_selection(article_choice: str, articles_state: List[Dic
         return f"❌ Error ingesting article: {str(e)}"
 
 
-def handle_pdf_upload(file) -> str:
+def handle_pdf_upload(file, model_id: str) -> str:
     """Handle PDF upload and trigger extraction"""
     if file is None:
         return "No file uploaded."
@@ -155,7 +161,8 @@ def handle_pdf_upload(file) -> str:
                 return await run_agent(
                     new_message=f"Extract triplets from source: {source_dict['source_id']}",
                     user_id=DEFAULT_USER_ID,
-                    session_id=session_id
+                    session_id=session_id,
+                    model_id=model_id,
                 )
             result = asyncio.run(extract_triplets())
             
@@ -307,7 +314,7 @@ def load_approved_triplets_for_mcq() -> gr.Dropdown:
         db.close()
 
 
-async def handle_generate_mcq(triplet_choice: str, llm_model: str) -> Tuple[str, str, str]:
+async def handle_generate_mcq(triplet_choice: str, model_id: str) -> Tuple[str, str, str]:
     """Generate MCQ from selected triplet"""
     if not triplet_choice:
         return "*Please select a triplet first*", "", ""
@@ -327,9 +334,10 @@ async def handle_generate_mcq(triplet_choice: str, llm_model: str) -> Tuple[str,
             session_id = await get_or_create_session()
             from app.core.runner import run_agent
             result = await run_agent(
-                new_message=f"Generate MCQ from triplet {triplet_id}. Use model: {llm_model}",
+                new_message=f"Generate MCQ from triplet {triplet_id}.",
                 user_id=DEFAULT_USER_ID,
-                session_id=session_id
+                session_id=session_id,
+                model_id=model_id,
             )
             
             # Extract MCQ data from result
@@ -393,7 +401,7 @@ def format_original_mcq(mcq: MCQRecord, source: Source, triplet: Triplet) -> str
     return html
 
 
-async def handle_request_update(update_request: str, mcq_id_state: int) -> str:
+async def handle_request_update(update_request: str, mcq_id_state: int, model_id: str) -> str:
     """Request MCQ update from LLM"""
     if not update_request.strip():
         return "*Please describe the update you want.*"
@@ -407,7 +415,8 @@ async def handle_request_update(update_request: str, mcq_id_state: int) -> str:
         result = await run_agent(
             new_message=f"Update MCQ {mcq_id_state} with the following changes: {update_request}",
             user_id=DEFAULT_USER_ID,
-            session_id=session_id
+            session_id=session_id,
+            model_id=model_id,
         )
         
         # Extract updated MCQ
@@ -466,9 +475,10 @@ def handle_generate_image(visual_prompt: str, llm_model: str) -> Tuple[gr.Image,
     )
 
 
-def update_llm_model(model: str) -> str:
-    """Update LLM model selection"""
-    return f"✅ LLM model set to: {model}"
+def update_llm_model(model_id: str) -> Tuple[str, str]:
+    """Update LLM model selection and persist state."""
+    label = llm_manager.get_label(model_id)
+    return f"✅ LLM model set to: {label}", model_id
 
 
 # ========== Main Interface ==========
@@ -481,14 +491,24 @@ def create_interface():
         with gr.Row():
             gr.Markdown("# 🏥 Medical MCQ Generator")
             llm_selector = gr.Dropdown(
-                choices=["ChatGPT 4o", "Gemini 2.5"],
-                value="ChatGPT 4o",
+                choices=llm_manager.get_choices(),
+                value=llm_manager.default_id,
                 label="LLM Model",
                 scale=1
             )
-            llm_status = gr.Textbox(label="Status", value="✅ ChatGPT 4o selected", interactive=False, scale=2)
+            llm_status = gr.Textbox(
+                label="Status",
+                value=f"✅ {llm_manager.get_label(llm_manager.default_id)} selected",
+                interactive=False,
+                scale=2
+            )
+        llm_model_state = gr.State(llm_manager.default_id)
         
-        llm_selector.change(fn=update_llm_model, inputs=llm_selector, outputs=llm_status)
+        llm_selector.change(
+            fn=update_llm_model,
+            inputs=llm_selector,
+            outputs=[llm_status, llm_model_state]
+        )
         
         # Main Tabs
         with gr.Tabs():
@@ -540,15 +560,21 @@ def create_interface():
                 )
                 
                 ingest_btn.click(
-                    fn=lambda choice, articles: asyncio.run(handle_article_selection(choice, articles)),
-                    inputs=[article_dropdown, articles_state],
+                    fn=lambda choice, articles, model_id: asyncio.run(
+                        handle_article_selection(choice, articles, model_id)
+                    ),
+                    inputs=[article_dropdown, articles_state, llm_model_state],
                     outputs=[ingest_status]
                 ).then(
                     fn=lambda: refresh_ingested_sources(),
                     outputs=[ingested_sources]
                 )
                 
-                pdf_upload.change(fn=handle_pdf_upload, inputs=pdf_upload, outputs=upload_status)
+                pdf_upload.change(
+                    fn=lambda file, model_id: handle_pdf_upload(file, model_id),
+                    inputs=[pdf_upload, llm_model_state],
+                    outputs=upload_status
+                )
                 refresh_sources_btn.click(fn=refresh_ingested_sources, outputs=ingested_sources)
             
             # Tab 2: Triplet Review
@@ -668,8 +694,8 @@ def create_interface():
                 # Connect handlers
                 refresh_triplets_mcq.click(fn=load_approved_triplets_for_mcq, outputs=triplet_for_mcq)
                 
-                def generate_wrapper(triplet_choice, llm_model):
-                    result = asyncio.run(handle_generate_mcq(triplet_choice, llm_model))
+                def generate_wrapper(triplet_choice, model_id):
+                    result = asyncio.run(handle_generate_mcq(triplet_choice, model_id))
                     # Extract MCQ ID from database (simplified - store in state)
                     db = SessionLocal()
                     try:
@@ -681,7 +707,7 @@ def create_interface():
                 
                 generate_mcq_btn.click(
                     fn=generate_wrapper,
-                    inputs=[triplet_for_mcq, llm_selector],
+                    inputs=[triplet_for_mcq, llm_model_state],
                     outputs=[original_mcq_display, visual_prompt_display, visual_triplet_display, mcq_id_state]
                 )
                 
@@ -692,8 +718,10 @@ def create_interface():
                 )
                 
                 request_update_btn.click(
-                    fn=lambda req, mcq_id: asyncio.run(handle_request_update(req, mcq_id)),
-                    inputs=[update_request, mcq_id_state],
+                    fn=lambda req, mcq_id, model_id: asyncio.run(
+                        handle_request_update(req, mcq_id, model_id)
+                    ),
+                    inputs=[update_request, mcq_id_state, llm_model_state],
                     outputs=updated_mcq_display
                 )
                 

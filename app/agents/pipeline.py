@@ -159,3 +159,17 @@ mcq_pipeline = SequentialAgent(
     ]
 )
 
+
+def set_pipeline_model(model) -> None:
+    """Apply the provided LLM model to every agent in the pipeline."""
+    agents = [
+        source_ingestion_agent,
+        fact_extraction_agent,
+        kb_management_agent,
+        mcq_generation_agent,
+        visual_refiner_agent,
+    ]
+    for agent in agents:
+        agent.model = model
+    mcq_pipeline.model = model
+

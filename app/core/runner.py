@@ -6,47 +6,52 @@ from app.core.session import session_service
 from typing import Optional, Any
 import time
 
+from app.core.llm_manager import llm_manager
+from app.agents.pipeline import set_pipeline_model
+from app.agents.mcq_refinement import set_refinement_model
+
 
 runner = Runner(app=app, session_service=session_service)
 
 
-async def run_agent(new_message: str, user_id: str = "default", session_id: Optional[str] = None) -> Any:
+async def run_agent(
+    new_message: str,
+    user_id: str = "default",
+    session_id: Optional[str] = None,
+    model_id: Optional[str] = None,
+) -> Any:
     """
     Helper function to run agent and collect final result from async generator.
-    
-    This function manages a complete conversation session, handling session creation/retrieval,
-    query processing, and response streaming.
     
     Args:
         new_message: Message text to send to agent
         user_id: User identifier
         session_id: Session ID (if None, will create new session)
+        model_id: Optional LLM identifier
     
     Returns:
-        Final result from agent pipeline (text content from final response)
+        Final result from agent pipeline
     """
     if session_id is None:
         session_id = await create_new_session(user_id)
     
-    # Create proper message object using google.genai.types
-    # Runner expects a Content object with role and parts, not a plain string
-    query_content = types.Content(role="user", parts=[types.Part(text=new_message)])
+    # Apply the selected model across the pipeline and refinement loop.
+    model = llm_manager.get_model(model_id)
+    set_pipeline_model(model)
+    set_refinement_model(model)
     
-    # runner.run_async returns an async generator - collect all events
+    query_content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=new_message)],
+    )
+    
     result = None
     async for event in runner.run_async(
         user_id=user_id,
         session_id=session_id,
         new_message=query_content
     ):
-        # Extract final response content
-        if event.is_final_response() and event.content and event.content.parts:
-            text = event.content.parts[0].text
-            if text and text != "None":
-                result = text
-        else:
-            # Keep the last event as fallback
-            result = event
+        result = event
     
     return result
 

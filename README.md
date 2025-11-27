@@ -40,8 +40,8 @@ This application solves the problem through a **multi-agent pipeline** powered b
 - **[Pydantic](https://docs.pydantic.dev/)** - Data validation and settings management
 
 ### LLM Providers
-- **Gemini 2.5 Flash Lite** (default) - Fast, cost-effective generation
-- **ChatGPT 4o** (optional) - Alternative LLM option
+- **ChatGPT 4o mini** (default) – OpenAI GPT-4o mini via custom OpenAI LLM wrapper
+- **Gemini 2.5 Flash Lite** (optional) – Google Gemini 2.5 Flash Lite selectable from the UI
 
 ### Database
 - **SQLite** - Persistent storage for sources, triplets, MCQs, and sessions
@@ -172,11 +172,11 @@ Fallback for distractor generation:
    
    Create a `.env` file in the root directory:
    ```env
-   # Required for Google ADK agents
-   GOOGLE_API_KEY=your_google_api_key_here
-   
-   # Optional: For ChatGPT 4o (if using)
+   # Required: ChatGPT 4o mini (default LLM)
    OPENAI_API_KEY=your_openai_api_key_here
+   
+   # Optional: Enable Gemini fallback / Google Search tools
+   GOOGLE_API_KEY=your_google_api_key_here
    
    # Optional: For PubMed API (set your email)
    NCBI_EMAIL=your_email@example.com
@@ -233,7 +233,9 @@ agent-capstone/
 │   ├── core/                # Core configuration
 │   │   ├── app.py          # App with context compaction
 │   │   ├── session.py      # DatabaseSessionService
-│   │   └── runner.py        # Runner with session restore
+│   │   ├── runner.py       # Runner with session restore & model routing
+│   │   ├── llm_manager.py  # Dataclass-driven LLM registry + fallback
+│   │   └── openai_llm.py   # Custom BaseLlm wrapper for ChatGPT 4o mini
 │   ├── db/                  # Database layer
 │   │   ├── models.py        # SQLAlchemy models
 │   │   └── database.py      # Database setup
@@ -275,6 +277,11 @@ agent-capstone/
 - **Persistent Sessions**: Work persists across app restarts
 - **Context Compaction**: Efficient token usage in long sessions
 - **State Restoration**: Auto-restore last session on startup
+
+### LLM Flexibility
+- **ChatGPT 4o mini default**: Custom `OpenAILlm` wrapper makes OpenAI the primary model
+- **Gemini opt-in**: UI dropdown and session state let reviewers switch to Gemini 2.5 Flash Lite
+- **Centralized control**: `LLMManager` enforces graceful fallbacks and shared configuration
 
 ## Testing
 
@@ -332,7 +339,7 @@ my_tool_instance = FunctionTool(my_tool)
 
 ## License
 
-[Add your license here]
+MIT LICENSE
 
 ## Acknowledgments
 
@@ -349,4 +356,3 @@ my_tool_instance = FunctionTool(my_tool)
 
 ---
 
-**Status:** ✅ Production-ready backend, UI integrated, ready for testing and refinement.

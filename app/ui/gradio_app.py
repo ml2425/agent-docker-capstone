@@ -38,6 +38,7 @@ from app.services.media_service import (
     save_image,
     get_image_path,
     load_image_bytes,
+    delete_image,
 )
 from sqlalchemy.orm import Session
 from sqlalchemy import String
@@ -150,9 +151,6 @@ current_session_id = None
 
 # In-memory cache for MCQ drafts keyed by source_id
 pending_mcq_cache: Dict[int, Dict[str, Any]] = {}
-
-# In-memory cache for generated image bytes keyed by mcq_id
-pending_image_cache: Dict[int, bytes] = {}
 
 
 async def get_or_create_session() -> str:
@@ -959,16 +957,32 @@ def handle_accept_mcq(source_choice: str, visual_prompt: str) -> Tuple[str, Opti
         db.commit()
         db.refresh(mcq)
 
+        # Auto-generate image if visual prompt exists
+        image_path = None
+        if visual_prompt_text:
+            try:
+                result = generate_image_from_prompt(visual_prompt_text, DEFAULT_IMAGE_DIMENSION)
+                if result.success and result.image_bytes:
+                    image_path = save_image(mcq.id, result.image_bytes)
+                    mcq.image_url = image_path
+                    db.commit()
+            except Exception as e:
+                # Log error but don't fail MCQ acceptance
+                pass
+
         pending_mcq_cache.pop(source_id, None)
         _remove_pending_source(source_id)
 
-        return f"MCQ accepted and stored with ID {mcq.id}.", mcq.id
+        status_msg = f"MCQ accepted and stored with ID {mcq.id}."
+        if image_path:
+            status_msg += " Image generated and saved."
+        return status_msg, mcq.id
     finally:
         db.close()
 
 
 def handle_accept_visual_prompt(mcq_id: Optional[int], visual_prompt: str) -> Tuple[str, str, bool]:
-    """Persist the latest visual prompt for the stored MCQ and echo back the saved text."""
+    """Persist the latest visual prompt for the stored MCQ and auto-generate image."""
     if not mcq_id:
         return "Accept the MCQ first.", visual_prompt, False
 
@@ -980,8 +994,24 @@ def handle_accept_visual_prompt(mcq_id: Optional[int], visual_prompt: str) -> Tu
             return "MCQ not found.", visual_prompt, False
 
         mcq.visual_prompt = prompt_text
+        
+        # Auto-generate image if prompt exists
+        image_path = None
+        if prompt_text:
+            try:
+                result = generate_image_from_prompt(prompt_text, DEFAULT_IMAGE_DIMENSION)
+                if result.success and result.image_bytes:
+                    image_path = save_image(mcq_id, result.image_bytes)
+                    mcq.image_url = image_path
+            except Exception as e:
+                # Log error but don't fail visual prompt acceptance
+                pass
+        
         db.commit()
-        return f"Visual prompt saved for MCQ {mcq_id}.", prompt_text, True
+        status_msg = "Visual prompt saved."
+        if image_path:
+            status_msg += " Image generated and saved."
+        return status_msg, prompt_text, True
     finally:
         db.close()
 
@@ -1079,26 +1109,20 @@ def _list_stored_mcqs(page: int = 1, page_size: int = 10, query: Optional[str] =
 
 
 def render_kb_list(page: int = 1, query: Optional[str] = None) -> Tuple[str, int, str]:
-    """Render Knowledge Base list with pagination."""
-    results, total_pages = _list_stored_mcqs(page, 10, query)
+    """Render Knowledge Base list with pagination (6 per page)."""
+    results, total_pages = _list_stored_mcqs(page, 6, query)
     
     if not results:
         return "*No MCQs found.*", 1, "Page 1/1"
     
-    lines = ["### Stored MCQs\n"]
+    lines = ["### Stored MCQs (6 per page)\n"]
     for mcq, source, triplet in results:
         year = source.publication_year or "Year N/A"
-        authors = source.authors or "Authors N/A"
         title = source.title or "Untitled"
+        question_preview = mcq.question[:80] + "..." if len(mcq.question) > 80 else mcq.question
         lines.append(
-            f"**{title}** ({year})\n"
-            f"- **PMID/ID:** {source.source_id}\n"
-            f"- **Authors:** {authors}\n"
-            f"- **MCQ ID:** {mcq.id}\n"
-            f"- **Question:** {mcq.question[:100]}{'...' if len(mcq.question) > 100 else ''}\n"
-            f"- **Status:** {mcq.status}\n"
-            f"- **Created:** {mcq.created_at.strftime('%Y-%m-%d %H:%M') if mcq.created_at else 'N/A'}\n"
-            f"- **Click to view details**\n"
+            f"**MCQ ID: {mcq.id}** | {title} ({year})\n"
+            f"Question: {question_preview}\n"
             "---\n"
         )
     
@@ -1113,7 +1137,7 @@ def search_stored_mcqs(query: str) -> Tuple[str, int, str]:
 
 
 def get_mcq_detail(mcq_id: int) -> Tuple[str, str, Optional[gr.Image], str]:
-    """Get detailed view of an MCQ including triplets, visual prompt, and image."""
+    """Get detailed view of an MCQ formatted like Tab 2, including triplets, visual prompt, and image."""
     db = SessionLocal()
     try:
         result = (
@@ -1129,38 +1153,10 @@ def get_mcq_detail(mcq_id: int) -> Tuple[str, str, Optional[gr.Image], str]:
         
         mcq, source, triplet = result
         
-        # Format MCQ
-        options = json.loads(mcq.options)
-        options_text = "\n".join(
-            f"{'✓' if idx == mcq.correct_option else ' '} {chr(65+idx)}) {opt}"
-            for idx, opt in enumerate(options)
-        )
-        
-        year = source.publication_year or "Year N/A"
-        authors = source.authors or "Authors N/A"
-        
-        mcq_html = f"""
-## MCQ Details (ID: {mcq.id})
-
-### Source Information
-- **Title:** {source.title or 'Untitled'}
-- **PMID/ID:** {source.source_id}
-- **Authors:** {authors}
-- **Year:** {year}
-- **Status:** {mcq.status}
-
-### Clinical Stem
-{mcq.stem}
-
-### Question
-{mcq.question}
-
-### Options
-{options_text}
-
-### Visual Prompt
-{mcq.visual_prompt or '*Not set*'}
-"""
+        # Format MCQ like Tab 2
+        mcq_html = format_original_mcq(mcq, source, triplet)
+        if mcq.visual_prompt:
+            mcq_html += f"\n### Visual Prompt:\n{mcq.visual_prompt}\n"
         
         # Format triplets
         triplet_md = ""
@@ -1306,6 +1302,23 @@ def export_mcq_text(mcq_id: int) -> str:
         db.close()
 
 
+def copy_mcq_text(mcq_id: int) -> str:
+    """Return MCQ text formatted for easy copy-paste into Word."""
+    return export_mcq_text(mcq_id)
+
+
+def copy_visual_prompt(mcq_id: int) -> str:
+    """Return visual prompt text for easy copy-paste."""
+    db = SessionLocal()
+    try:
+        mcq = db.query(MCQRecord).filter(MCQRecord.id == mcq_id).first()
+        if not mcq:
+            return "MCQ not found."
+        return mcq.visual_prompt or "No visual prompt set."
+    finally:
+        db.close()
+
+
 def open_mcq_in_builder(mcq_id: int) -> Tuple[str, str, str]:
     """Prepare to open MCQ in Tab 2 (Builder) by selecting the source article."""
     db = SessionLocal()
@@ -1427,94 +1440,50 @@ async def handle_request_update(update_request: str, mcq_id_state: int, model_id
         return f"Error: {e}"
 
 
-def handle_generate_image(
-    visual_prompt: str,
-    image_size: str,
-    mcq_id: Optional[int] = None,
-) -> Tuple[gr.Image, gr.Textbox, gr.Textbox, gr.Button]:
-    """Draft an image but delay preview until the user confirms."""
+def handle_show_image(mcq_id: Optional[int]) -> Tuple[gr.Image, str]:
+    """Load and display image from media folder."""
     if not mcq_id:
-        return (
-            gr.update(visible=False, value=None),
-            gr.update(value=image_size or DEFAULT_IMAGE_DIMENSION, visible=True),
-            gr.update(value="Accept the MCQ before generating an image.", visible=True),
-            gr.update(visible=False),
-        )
-
-    prompt = (visual_prompt or "").strip()
-    if not prompt:
-        return (
-            gr.update(visible=False, value=None),
-            gr.update(value=image_size or DEFAULT_IMAGE_DIMENSION, visible=True),
-            gr.update(value="Provide a visual prompt before generating an image.", visible=True),
-            gr.update(visible=False),
-        )
-
-    size_value = (image_size or "").strip() or DEFAULT_IMAGE_DIMENSION
-    result = generate_image_from_prompt(prompt, size_value)
-    if not result.success or not result.image_bytes:
-        return (
-            gr.update(visible=False, value=None),
-            gr.update(value=size_value, visible=True),
-            gr.update(value=result.message, visible=True),
-            gr.update(visible=False),
-        )
-
-    pending_image_cache[mcq_id] = result.image_bytes
-    return (
-        gr.update(visible=False, value=None),
-        gr.update(value=result.size_used or size_value, visible=True),
-        gr.update(value="Image draft ready. Click 'Show Image' to store and preview.", visible=True),
-        gr.update(visible=True),
-    )
-
-
-def handle_accept_image(mcq_id: Optional[int]) -> Tuple[str, gr.Image, gr.Button]:
-    """Persist the drafted image and reveal the preview."""
-    if not mcq_id:
-        return (
-            "No MCQ selected. Accept an MCQ first.",
-            gr.update(visible=False, value=None),
-            gr.update(visible=False),
-        )
+        return gr.update(visible=False, value=None), "No MCQ selected."
     
-    image_bytes = pending_image_cache.get(mcq_id)
-    if not image_bytes:
-        return (
-            "No image generated yet. Generate an image first.",
-            gr.update(visible=False, value=None),
-            gr.update(visible=False),
-        )
+    image_file = get_image_path(mcq_id)
+    if not image_file or not image_file.exists():
+        return gr.update(visible=False, value=None), "No image found. Image is generated automatically when you accept MCQ or visual prompt."
+    
+    try:
+        with Image.open(image_file) as img:
+            # Convert to RGB if necessary (Gradio works better with RGB)
+            if img.mode in ('RGBA', 'LA', 'P'):
+                rgb_img = Image.new('RGB', img.size, (255, 255, 255))
+                if img.mode == 'P':
+                    img = img.convert('RGBA')
+                rgb_img.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                image_copy = rgb_img.copy()
+            else:
+                image_copy = img.convert('RGB').copy()
+        
+        return gr.update(value=image_copy, visible=True), f"Image loaded from {image_file.name}"
+    except Exception as exc:
+        return gr.update(visible=False, value=None), f"Error loading image: {exc}"
+
+
+def handle_delete_image(mcq_id: Optional[int]) -> Tuple[gr.Image, str]:
+    """Delete image file and update database."""
+    if not mcq_id:
+        return gr.update(visible=False, value=None), "No MCQ selected."
     
     db = SessionLocal()
     try:
         mcq = db.query(MCQRecord).filter(MCQRecord.id == mcq_id).first()
         if not mcq:
-            return (
-                "MCQ not found.",
-                gr.update(visible=False, value=None),
-                gr.update(visible=False),
-            )
+            return gr.update(visible=False, value=None), "MCQ not found."
         
-        image_path = save_image(mcq_id, image_bytes)
-        mcq.image_url = image_path
-        db.commit()
-        
-        pending_image_cache.pop(mcq_id, None)
-        
-        image_file = get_image_path(mcq_id)
-        if image_file and image_file.exists():
-            image = Image.open(image_file)
-            return (
-                f"Image saved to {image_path}",
-                gr.update(value=image, visible=True),
-                gr.update(visible=False),
-            )
-        return (
-            f"Image saved to {image_path}",
-            gr.update(visible=False, value=None),
-            gr.update(visible=False),
-        )
+        deleted = delete_image(mcq_id)
+        if deleted:
+            mcq.image_url = None
+            db.commit()
+            return gr.update(visible=False, value=None), "Image deleted successfully."
+        else:
+            return gr.update(visible=False, value=None), "No image found to delete."
     finally:
         db.close()
 
@@ -1526,305 +1495,7 @@ def update_llm_model(model_id: str) -> Tuple[str, str]:
 
 
 # ========== Main Interface ==========
-
-def _legacy_create_interface():
-    """Create the main Gradio interface."""
-    
-    with gr.Blocks(title="Medical MCQ Generator") as demo:
-        # Header with LLM Selector
-        with gr.Row():
-            gr.Markdown("# Medical MCQ Generator")
-            llm_selector = gr.Dropdown(
-                choices=llm_manager.get_choices(),
-                value=llm_manager.default_id,
-                label="LLM Model",
-                scale=1
-            )
-            llm_status = gr.Textbox(
-                label="Status",
-                value=f"{llm_manager.get_label(llm_manager.default_id)} selected",
-                interactive=False,
-                scale=2
-            )
-        llm_model_state = gr.State(llm_manager.default_id)
-        
-        llm_selector.change(
-            fn=update_llm_model,
-            inputs=llm_selector,
-            outputs=[llm_status, llm_model_state]
-        )
-        
-        # Main Tabs
-        with gr.Tabs():
-            # Tab 1: Source Search/Upload
-            with gr.Tab("Source Search/Upload"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.Markdown("### Search PubMed Articles")
-                        pubmed_search = gr.Textbox(
-                            label="Enter keywords",
-                            placeholder="e.g., diabetes treatment, metformin",
-                            lines=1
-                        )
-                        search_btn = gr.Button("Search", variant="primary")
-                        search_results = gr.Markdown(value="*Enter keywords and click Search*")
-                        
-                        articles_state = gr.State([])
-                        selection_input = gr.Textbox(
-                            label="Select article numbers",
-                            placeholder="Enter numbers separated by commas (e.g., 1,3,5). Run search first.",
-                            interactive=False,
-                            visible=True
-                        )
-                        select_articles_btn = gr.Button("Select Articles", variant="primary", interactive=False)
-                        selection_status = gr.Textbox(label="Selection Status", interactive=False, visible=True)
-                        
-                        gr.Markdown("---")
-                        gr.Markdown("### Upload PDF Document")
-                        pdf_upload = gr.File(
-                            label="Upload PDF",
-                            file_types=[".pdf"]
-                        )
-                        upload_status = gr.Textbox(label="Upload Status", interactive=False)
-                
-                    with gr.Column(scale=1):
-                        gr.Markdown("### Selected Sources")
-                        ingested_sources = gr.Markdown(value="*No sources selected yet*")
-                        refresh_sources_btn = gr.Button("Refresh Sources", variant="secondary")
-                
-                # Connect handlers
-                def search_wrapper(keywords):
-                    articles, message = handle_pubmed_search(keywords)
-                    results_text = f"{message}\n\n{format_articles_markdown(articles)}" if articles else message
-                    if articles:
-                        input_update = gr.update(interactive=True, value="")
-                        button_update = gr.update(interactive=True)
-                        status_update = gr.update(value="")
-                    else:
-                        input_update = gr.update(interactive=False, value="")
-                        button_update = gr.update(interactive=False)
-                        status_update = gr.update(value="")
-                    return results_text, articles, input_update, button_update, status_update
-                
-                search_btn.click(
-                    fn=search_wrapper,
-                    inputs=pubmed_search,
-                    outputs=[search_results, articles_state, selection_input, select_articles_btn, selection_status]
-                )
-                
-                select_articles_btn.click(
-                    fn=lambda choice, articles, model_id: asyncio.run(
-                        handle_article_selection_from_input(choice, articles, model_id)
-                    ),
-                    inputs=[selection_input, articles_state, llm_model_state],
-                    outputs=[selection_status]
-                ).then(
-                    fn=lambda: refresh_ingested_sources(),
-                    outputs=[ingested_sources]
-                )
-                
-                pdf_upload.change(
-                    fn=lambda file, model_id: handle_pdf_upload(file, model_id),
-                    inputs=[pdf_upload, llm_model_state],
-                    outputs=upload_status
-                )
-                refresh_sources_btn.click(fn=refresh_ingested_sources, outputs=[ingested_sources])
-            
-            # Tab 2: Triplet Review
-            with gr.Tab("Triplet Review"):
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("### Review Extracted Triplets")
-                        refresh_triplets = gr.Button("Refresh Triplets", variant="primary")
-                        triplet_display = gr.Markdown(value="*Click Refresh to load triplets*")
-                        
-                        triplet_dropdown = gr.Dropdown(
-                            choices=[],
-                            label="Select triplet to review",
-                            visible=False
-                        )
-                        
-                        with gr.Row():
-                            accept_btn = gr.Button("Accept", variant="primary")
-                            reject_btn = gr.Button("Reject")
-                        
-                        triplet_action_status = gr.Textbox(label="Action Status", interactive=False)
-                        
-                
-                def refresh_wrapper():
-                    html, dropdown = load_pending_triplets()
-                    return html, dropdown
-                
-                refresh_triplets.click(
-                    fn=refresh_wrapper,
-                    outputs=[triplet_display, triplet_dropdown]
-                )
-                
-                accept_btn.click(
-                    fn=handle_triplet_accept,
-                    inputs=triplet_dropdown,
-                    outputs=triplet_action_status
-                )
-                
-                reject_btn.click(
-                    fn=handle_triplet_reject,
-                    inputs=triplet_dropdown,
-                    outputs=triplet_action_status
-                )
-                
-            
-            # Tab 3: MCQ Review
-            with gr.Tab("MCQ Review"):
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("### Select Article")
-                        article_dropdown = gr.Dropdown(
-                            choices=[],
-                            label="Article",
-                            interactive=True,
-                            visible=False
-                        )
-                        article_status = gr.Textbox(label="Article Status", interactive=False)
-                        refresh_articles_mcq = gr.Button("Refresh Articles", variant="secondary")
-
-                        gr.Markdown("---")
-                        gr.Markdown("### Article MCQs")
-                        load_mcqs_btn = gr.Button("Load MCQs for Article", variant="secondary")
-                        mcq_dropdown = gr.Dropdown(
-                            choices=[],
-                            label="Select MCQ",
-                            interactive=True,
-                            visible=False
-                        )
-                        mcq_status = gr.Textbox(label="MCQ Status", interactive=False)
-
-                        generate_article_mcqs_btn = gr.Button("Generate MCQs for Article", variant="primary")
-                        view_mcq_btn = gr.Button("View Selected MCQ", variant="secondary")
-                        regenerate_mcq_btn = gr.Button("Regenerate Selected MCQ", variant="primary")
-
-                        mcq_id_state = gr.State(None)
-
-                        with gr.Row():
-                            approve_mcq_btn = gr.Button("Approve", variant="primary")
-                            reject_mcq_btn = gr.Button("Reject")
-
-                        mcq_action_status = gr.Textbox(label="Action Status", interactive=False)
-
-                        gr.Markdown("---")
-                        gr.Markdown("### Original MCQ")
-                        original_mcq_display = gr.Markdown(
-                            value="*Select an article and MCQ to view details.*"
-                        )
-
-                        gr.Markdown("---")
-                        gr.Markdown("### Optimized Visual Prompt")
-                        visual_prompt_display = gr.Textbox(
-                            label="Visual Prompt",
-                            value="",
-                            lines=4,
-                            interactive=True
-                        )
-                        visual_triplet_display = gr.Textbox(
-                            label="Visual Triplet",
-                            value="",
-                            interactive=False
-                        )
-                        image_size_input = gr.Textbox(
-                            label="Image Size (pixels)",
-                            value=DEFAULT_IMAGE_DIMENSION,
-                            placeholder="e.g., 512x512 (default)",
-                        )
-                        generate_image_btn = gr.Button("Generate Image", variant="primary")
-
-                        gr.Markdown("---")
-                        gr.Markdown("### Generated Image")
-                        image_display = gr.Image(label="Generated Image", visible=True, type="pil")
-                        image_action_status = gr.Textbox(label="Image Action Status", interactive=False, visible=False)
-
-                        gr.Markdown("---")
-                        gr.Markdown("### Request MCQ Update")
-                        update_request = gr.Textbox(
-                            label="Describe the update you want",
-                            placeholder="e.g., Add more clinical context to stem",
-                            lines=2
-                        )
-                        request_update_btn = gr.Button("Request Update", variant="primary")
-
-                        gr.Markdown("### Updated MCQ (LLM Generated)")
-                        updated_mcq_display = gr.Markdown(value="*Request an update to see the LLM-generated version*")
-
-                        with gr.Row():
-                            accept_update_btn = gr.Button("Accept Update", variant="primary")
-                            reject_update_btn = gr.Button("Reject Update")
-
-                        update_action_status = gr.Textbox(label="Update Action Status", interactive=False)
-
-                # Connect handlers
-                refresh_articles_mcq.click(
-                    fn=load_articles_for_mcq_dropdown,
-                    outputs=[article_dropdown, article_status]
-                )
-
-                load_mcqs_btn.click(
-                    fn=lambda source_choice: load_mcqs_for_article_dropdown(source_choice),
-                    inputs=article_dropdown,
-                    outputs=[mcq_status, mcq_dropdown]
-                )
-
-                generate_article_mcqs_btn.click(
-                    fn=lambda source_choice, model_id: asyncio.run(
-                        handle_generate_mcqs_for_article(source_choice, model_id)
-                    ),
-                    inputs=[article_dropdown, llm_model_state],
-                    outputs=mcq_status
-                )
-
-                view_mcq_btn.click(
-                    fn=handle_view_mcq,
-                    inputs=mcq_dropdown,
-                    outputs=[original_mcq_display, visual_prompt_display, visual_triplet_display, mcq_id_state]
-                )
-
-                regenerate_mcq_btn.click(
-                    fn=lambda mcq_choice, model_id: asyncio.run(
-                        handle_regenerate_mcq(mcq_choice, model_id)
-                    ),
-                    inputs=[mcq_dropdown, llm_model_state],
-                    outputs=[original_mcq_display, visual_prompt_display, visual_triplet_display, mcq_id_state]
-                )
-
-                generate_image_btn.click(
-                    fn=lambda prompt, size, mcq_id: handle_generate_image(prompt, size, mcq_id),
-                    inputs=[visual_prompt_display, image_size_input, mcq_id_state],
-                    outputs=[image_display, image_size_input, image_action_status, accept_image_btn],
-                )
-                
-                accept_image_btn.click(
-                    fn=lambda mcq_id: handle_accept_image(mcq_id),
-                    inputs=mcq_id_state,
-                    outputs=[image_action_status, image_display, accept_image_btn],
-                )
-
-                request_update_btn.click(
-                    fn=lambda req, mcq_id, model_id: asyncio.run(
-                        handle_request_update(req, mcq_id, model_id)
-                    ),
-                    inputs=[update_request, mcq_id_state, llm_model_state],
-                    outputs=updated_mcq_display
-                )
-
-                approve_mcq_btn.click(fn=lambda: "MCQ approved (feature coming soon)", outputs=mcq_action_status)
-                reject_mcq_btn.click(fn=lambda: "MCQ rejected (feature coming soon)", outputs=mcq_action_status)
-                accept_update_btn.click(fn=lambda: "Update accepted (feature coming soon)", outputs=update_action_status)
-                reject_update_btn.click(fn=lambda: "Update rejected (feature coming soon)", outputs=update_action_status)
-            
-            # Tab 4: Knowledge Base
-            with gr.Tab("Knowledge Base"):
-                gr.Markdown("### Browse Approved Triplets and MCQs")
-                gr.Markdown("*This feature will be implemented in a future phase*")
-    
-    return demo
-
+# Legacy interface removed - see create_interface() below for the current implementation
 
 def create_interface():
     """Updated Gradio interface with pending → builder → knowledge base flow."""
@@ -1990,16 +1661,13 @@ def create_interface():
                             interactive=False
                         )
                         accept_visual_prompt_btn = gr.Button("Accept Visual Prompt", variant="primary")
-                        image_size_input = gr.Textbox(
-                            label="Image Size (pixels)",
-                            value=DEFAULT_IMAGE_DIMENSION,
-                            placeholder="e.g., 512x512 (default)",
-                        )
-                        generate_image_btn = gr.Button("Generate Image", variant="secondary")
-                        accept_image_btn = gr.Button("Show Image", variant="primary", visible=False)
-
+                        
+                        gr.Markdown("---")
+                        gr.Markdown("### Image (Auto-generated on Accept)")
+                        show_image_btn = gr.Button("Show Image", variant="secondary")
+                        delete_image_btn = gr.Button("Delete Image", variant="secondary")
                         image_display = gr.Image(label="Generated Image", visible=False, type="pil")
-                        image_action_status = gr.Textbox(label="Image Status", interactive=False, visible=False)
+                        image_status = gr.Textbox(label="Image Status", interactive=False, visible=True)
 
                 refresh_pending_articles_btn.click(
                     fn=load_pending_articles_dropdown,
@@ -2081,16 +1749,16 @@ def create_interface():
                     outputs=accept_visual_prompt_btn
                 )
 
-                generate_image_btn.click(
-                    fn=lambda prompt, size, mcq_id: handle_generate_image(prompt, size, mcq_id),
-                    inputs=[visual_prompt_display, image_size_input, mcq_id_state],
-                    outputs=[image_display, image_size_input, image_action_status, accept_image_btn],
+                show_image_btn.click(
+                    fn=lambda mcq_id: handle_show_image(mcq_id),
+                    inputs=mcq_id_state,
+                    outputs=[image_display, image_status]
                 )
                 
-                accept_image_btn.click(
-                    fn=lambda mcq_id: handle_accept_image(mcq_id),
+                delete_image_btn.click(
+                    fn=lambda mcq_id: handle_delete_image(mcq_id),
                     inputs=mcq_id_state,
-                    outputs=[image_action_status, image_display, accept_image_btn],
+                    outputs=[image_display, image_status]
                 )
 
             # Tab 3: Knowledge Base
@@ -2100,10 +1768,10 @@ def create_interface():
                 
                 with gr.Row():
                     with gr.Column(scale=2):
-                        gr.Markdown("### Search Stored MCQs")
+                        gr.Markdown("### Search Stored MCQs (Optional)")
                         kb_search_input = gr.Textbox(
-                            label="Search by PMID, title, authors, year, filename, or question text",
-                            placeholder="e.g., PMID:123456, stroke, 2023, pdf_abcd1234"
+                            label="Search by PMID, title, or question text",
+                            placeholder="e.g., 123456, stroke, 2023"
                         )
                         kb_search_btn = gr.Button("Search", variant="primary")
                         kb_clear_btn = gr.Button("Clear Search", variant="secondary")
@@ -2129,16 +1797,28 @@ def create_interface():
                     
                     with gr.Column(scale=3):
                         gr.Markdown("### MCQ Details")
-                        kb_detail_display = gr.Markdown(value="*Select an MCQ ID and click 'View Details' to see full information.*")
+                        kb_detail_display = gr.Markdown(value="*Enter an MCQ ID and click 'View Details' to see full information.*")
                         kb_triplet_display = gr.Markdown(value="")
                         kb_image_display = gr.Image(label="MCQ Image", visible=False)
                         kb_image_status = gr.Textbox(label="Image Status", interactive=False, visible=False)
                         
                         gr.Markdown("---")
+                        gr.Markdown("### Copy to Clipboard")
+                        with gr.Row():
+                            kb_copy_mcq_btn = gr.Button("Copy MCQ Text", variant="primary")
+                            kb_copy_visual_btn = gr.Button("Copy Visual Prompt", variant="secondary")
+                        kb_copy_display = gr.Textbox(
+                            label="Copy Output (select all and copy)",
+                            lines=8,
+                            visible=False,
+                            interactive=True
+                        )
+                        
+                        gr.Markdown("---")
                         gr.Markdown("### Export Options")
                         with gr.Row():
-                            kb_export_json_btn = gr.Button("Copy as JSON", variant="secondary")
-                            kb_export_text_btn = gr.Button("Copy as Text", variant="secondary")
+                            kb_export_text_btn = gr.Button("Export as Text", variant="secondary")
+                            kb_export_json_btn = gr.Button("Export as JSON", variant="secondary")
                         kb_export_display = gr.Textbox(
                             label="Export Output",
                             lines=10,
@@ -2178,6 +1858,18 @@ def create_interface():
                         return gr.update(value="", visible=False)
                     json_str = export_mcq_json(mcq_id)
                     return gr.update(value=json_str, visible=True)
+                
+                def copy_mcq_wrapper(mcq_id):
+                    if not mcq_id:
+                        return gr.update(value="", visible=False)
+                    text_str = copy_mcq_text(mcq_id)
+                    return gr.update(value=text_str, visible=True)
+                
+                def copy_visual_wrapper(mcq_id):
+                    if not mcq_id:
+                        return gr.update(value="", visible=False)
+                    text_str = copy_visual_prompt(mcq_id)
+                    return gr.update(value=text_str, visible=True)
                 
                 def export_text_wrapper(mcq_id):
                     if not mcq_id:
@@ -2220,14 +1912,26 @@ def create_interface():
                     outputs=[kb_detail_display, kb_triplet_display, kb_image_display, kb_image_status, kb_mcq_id_state]
                 )
                 
-                kb_export_json_btn.click(
-                    fn=export_json_wrapper,
+                kb_copy_mcq_btn.click(
+                    fn=copy_mcq_wrapper,
                     inputs=kb_mcq_id_state,
-                    outputs=kb_export_display
+                    outputs=kb_copy_display
+                )
+                
+                kb_copy_visual_btn.click(
+                    fn=copy_visual_wrapper,
+                    inputs=kb_mcq_id_state,
+                    outputs=kb_copy_display
                 )
                 
                 kb_export_text_btn.click(
                     fn=export_text_wrapper,
+                    inputs=kb_mcq_id_state,
+                    outputs=kb_export_display
+                )
+                
+                kb_export_json_btn.click(
+                    fn=export_json_wrapper,
                     inputs=kb_mcq_id_state,
                     outputs=kb_export_display
                 )

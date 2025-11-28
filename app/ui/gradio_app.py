@@ -957,26 +957,10 @@ def handle_accept_mcq(source_choice: str, visual_prompt: str) -> Tuple[str, Opti
         db.commit()
         db.refresh(mcq)
 
-        # Auto-generate image if visual prompt exists
-        image_path = None
-        if visual_prompt_text:
-            try:
-                result = generate_image_from_prompt(visual_prompt_text, DEFAULT_IMAGE_DIMENSION)
-                if result.success and result.image_bytes:
-                    image_path = save_image(mcq.id, result.image_bytes)
-                    mcq.image_url = image_path
-                    db.commit()
-            except Exception as e:
-                # Log error but don't fail MCQ acceptance
-                pass
-
         pending_mcq_cache.pop(source_id, None)
         _remove_pending_source(source_id)
 
-        status_msg = f"MCQ accepted and stored with ID {mcq.id}."
-        if image_path:
-            status_msg += " Image generated and saved."
-        return status_msg, mcq.id
+        return f"MCQ accepted and stored with ID {mcq.id}.", mcq.id
     finally:
         db.close()
 
@@ -994,24 +978,8 @@ def handle_accept_visual_prompt(mcq_id: Optional[int], visual_prompt: str) -> Tu
             return "MCQ not found.", visual_prompt, False
 
         mcq.visual_prompt = prompt_text
-        
-        # Auto-generate image if prompt exists
-        image_path = None
-        if prompt_text:
-            try:
-                result = generate_image_from_prompt(prompt_text, DEFAULT_IMAGE_DIMENSION)
-                if result.success and result.image_bytes:
-                    image_path = save_image(mcq_id, result.image_bytes)
-                    mcq.image_url = image_path
-            except Exception as e:
-                # Log error but don't fail visual prompt acceptance
-                pass
-        
         db.commit()
-        status_msg = "Visual prompt saved."
-        if image_path:
-            status_msg += " Image generated and saved."
-        return status_msg, prompt_text, True
+        return "Visual prompt saved.", prompt_text, True
     finally:
         db.close()
 
@@ -1441,14 +1409,43 @@ async def handle_request_update(update_request: str, mcq_id_state: int, model_id
 
 
 def handle_show_image(mcq_id: Optional[int]) -> Tuple[gr.Image, str]:
-    """Load and display image from media folder."""
+    """Generate image if needed, then load and display from media folder."""
     if not mcq_id:
         return gr.update(visible=False, value=None), "No MCQ selected."
     
+    # Check if image already exists
     image_file = get_image_path(mcq_id)
-    if not image_file or not image_file.exists():
-        return gr.update(visible=False, value=None), "No image found. Image is generated automatically when you accept MCQ or visual prompt."
     
+    # If image doesn't exist, generate it first
+    if not image_file or not image_file.exists():
+        db = SessionLocal()
+        try:
+            mcq = db.query(MCQRecord).filter(MCQRecord.id == mcq_id).first()
+            if not mcq:
+                return gr.update(visible=False, value=None), "MCQ not found."
+            
+            visual_prompt = (mcq.visual_prompt or "").strip()
+            if not visual_prompt:
+                return gr.update(visible=False, value=None), "No visual prompt found. Accept a visual prompt first."
+            
+            # Generate image
+            result = generate_image_from_prompt(visual_prompt, DEFAULT_IMAGE_DIMENSION)
+            if not result.success or not result.image_bytes:
+                return gr.update(visible=False, value=None), f"Error generating image: {result.message}"
+            
+            # Save image
+            image_path = save_image(mcq_id, result.image_bytes)
+            mcq.image_url = image_path
+            db.commit()
+            
+            # Return status - user needs to click again to see it
+            return gr.update(visible=False, value=None), f"Image generated and saved. Click 'Show Image' again to display."
+        except Exception as exc:
+            return gr.update(visible=False, value=None), f"Error generating image: {exc}"
+        finally:
+            db.close()
+    
+    # Image exists, load and display it
     try:
         with Image.open(image_file) as img:
             # Convert to RGB if necessary (Gradio works better with RGB)
@@ -1633,14 +1630,14 @@ def create_interface():
                         refresh_pending_articles_btn = gr.Button("Refresh Pending Articles", variant="secondary")
 
                         gr.Markdown("---")
-                        generate_mcq_btn = gr.Button("Generate MCQ Draft", variant="primary")
+                        generate_mcq_btn = gr.Button("Generate MCQ Draft (takes a few seconds)", variant="primary")
                         mcq_feedback_input = gr.Textbox(
                             label="Reviewer Feedback",
                             placeholder="Optional instructions for refinement",
                             lines=2
                         )
                         apply_feedback_btn = gr.Button("Apply Feedback", variant="secondary")
-                        accept_mcq_btn = gr.Button("Accept MCQ (takes a few seconds)", variant="primary")
+                        accept_mcq_btn = gr.Button("Accept MCQ", variant="primary")
 
                         mcq_display = gr.Markdown(value="*Generate an MCQ draft to begin.*", elem_id="mcq_preview")
                         triplet_display = gr.Markdown(value="*Triplet details will appear here.*")
@@ -1660,11 +1657,11 @@ def create_interface():
                             value="",
                             interactive=False
                         )
-                        accept_visual_prompt_btn = gr.Button("Accept Visual Prompt (takes a few seconds)", variant="primary")
+                        accept_visual_prompt_btn = gr.Button("Accept Visual Prompt", variant="primary")
                         
                         gr.Markdown("---")
                         gr.Markdown("### Image (Auto-generated on Accept)")
-                        show_image_btn = gr.Button("Show Image (click once to load, second time to display 😞)", variant="secondary")
+                        show_image_btn = gr.Button("Show Image (first click generates, second click loads, third click displays 😞)", variant="secondary")
                         delete_image_btn = gr.Button("Delete Image", variant="secondary")
                         image_display = gr.Image(label="Generated Image", visible=False, type="pil")
                         image_status = gr.Textbox(label="Image Status", interactive=False, visible=True)

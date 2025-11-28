@@ -10,7 +10,9 @@ import asyncio
 import os
 import math
 import time
+import tempfile
 from io import BytesIO
+from pathlib import Path
 
 from PIL import Image
 
@@ -1287,6 +1289,125 @@ def copy_visual_prompt(mcq_id: int) -> str:
         db.close()
 
 
+def export_all_mcq(mcq_id: int) -> Optional[str]:
+    """Export MCQ, visual prompt, and image info as a downloadable .txt file."""
+    db = SessionLocal()
+    try:
+        result = (
+            db.query(MCQRecord, Source, Triplet)
+            .join(Source, MCQRecord.source_id == Source.id)
+            .outerjoin(Triplet, MCQRecord.triplet_id == Triplet.id)
+            .filter(MCQRecord.id == mcq_id)
+            .first()
+        )
+        
+        if not result:
+            return None
+        
+        mcq, source, triplet = result
+        options = json.loads(mcq.options)
+        
+        # Build comprehensive export text
+        lines = [
+            "=" * 80,
+            "MCQ EXPORT",
+            "=" * 80,
+            "",
+            f"MCQ ID: {mcq.id}",
+            f"Source: {source.title or 'Untitled'} ({source.source_id})",
+            f"Authors: {source.authors or 'N/A'}",
+            f"Year: {source.publication_year or 'N/A'}",
+            "",
+            "-" * 80,
+            "MCQ CONTENT",
+            "-" * 80,
+            "",
+            f"Stem: {mcq.stem}",
+            "",
+            f"Question: {mcq.question}",
+            "",
+            "Options:",
+        ]
+        
+        for idx, opt in enumerate(options):
+            marker = " [CORRECT]" if idx == mcq.correct_option else ""
+            lines.append(f"  {chr(65+idx)}) {opt}{marker}")
+        
+        if triplet:
+            lines.extend([
+                "",
+                "-" * 80,
+                "TRIPLET INFORMATION",
+                "-" * 80,
+                "",
+                f"Subject: {triplet.subject}",
+                f"Action: {triplet.action}",
+                f"Object: {triplet.object}",
+                f"Relation: {triplet.relation}",
+            ])
+        
+        if mcq.visual_prompt:
+            lines.extend([
+                "",
+                "-" * 80,
+                "VISUAL PROMPT",
+                "-" * 80,
+                "",
+                mcq.visual_prompt,
+            ])
+        
+        if mcq.image_url:
+            image_path = get_image_path(mcq_id)
+            if image_path and image_path.exists():
+                lines.extend([
+                    "",
+                    "-" * 80,
+                    "IMAGE INFORMATION",
+                    "-" * 80,
+                    "",
+                    f"Image Path: {mcq.image_url}",
+                    f"Image File: {image_path}",
+                    f"Image Status: Available",
+                ])
+            else:
+                lines.extend([
+                    "",
+                    "-" * 80,
+                    "IMAGE INFORMATION",
+                    "-" * 80,
+                    "",
+                    f"Image Path: {mcq.image_url}",
+                    f"Image Status: File not found",
+                ])
+        else:
+            lines.extend([
+                "",
+                "-" * 80,
+                "IMAGE INFORMATION",
+                "-" * 80,
+                "",
+                "Image Status: No image available",
+            ])
+        
+        # Create temporary file
+        content = "\n".join(lines)
+        temp_file = tempfile.NamedTemporaryFile(
+            mode='w',
+            suffix='.txt',
+            prefix=f'mcq_{mcq_id}_',
+            delete=False
+        )
+        temp_file.write(content)
+        temp_file.close()
+        
+        return temp_file.name
+    except Exception as e:
+        logger.error(f"Error exporting MCQ {mcq_id}: {e}")
+        return None
+    finally:
+        db.close()
+
+
 def open_mcq_in_builder(mcq_id: int) -> Tuple[str, str, str]:
     """Prepare to open MCQ in Tab 2 (Builder) by selecting the source article."""
     db = SessionLocal()
@@ -1800,27 +1921,11 @@ def create_interface():
                         kb_image_status = gr.Textbox(label="Image Status", interactive=False, visible=False)
                         
                         gr.Markdown("---")
-                        gr.Markdown("### Copy to Clipboard")
-                        with gr.Row():
-                            kb_copy_mcq_btn = gr.Button("Copy MCQ Text", variant="primary")
-                            kb_copy_visual_btn = gr.Button("Copy Visual Prompt", variant="secondary")
-                        kb_copy_display = gr.Textbox(
-                            label="Copy Output (select all and copy)",
-                            lines=8,
-                            visible=False,
-                            interactive=True
-                        )
-                        
-                        gr.Markdown("---")
-                        gr.Markdown("### Export Options")
-                        with gr.Row():
-                            kb_export_text_btn = gr.Button("Export as Text", variant="secondary")
-                            kb_export_json_btn = gr.Button("Export as JSON", variant="secondary")
-                        kb_export_display = gr.Textbox(
-                            label="Export Output",
-                            lines=10,
-                            visible=False,
-                            interactive=False
+                        gr.Markdown("### Export All")
+                        kb_export_all_btn = gr.Button("Export All (click twice to download 😞)", variant="primary")
+                        kb_export_file = gr.File(
+                            label="Download Export File",
+                            visible=False
                         )
                         kb_mcq_id_state = gr.State(None)
                 
@@ -1850,29 +1955,18 @@ def create_interface():
                     mcq_html, triplet_md, image_display, image_status = get_mcq_detail(int(mcq_id))
                     return mcq_html, triplet_md, image_display, image_status, int(mcq_id)
                 
-                def export_json_wrapper(mcq_id):
-                    if not mcq_id:
-                        return gr.update(value="", visible=False)
-                    json_str = export_mcq_json(mcq_id)
-                    return gr.update(value=json_str, visible=True)
-                
-                def copy_mcq_wrapper(mcq_id):
-                    if not mcq_id:
-                        return gr.update(value="", visible=False)
-                    text_str = copy_mcq_text(mcq_id)
-                    return gr.update(value=text_str, visible=True)
-                
-                def copy_visual_wrapper(mcq_id):
-                    if not mcq_id:
-                        return gr.update(value="", visible=False)
-                    text_str = copy_visual_prompt(mcq_id)
-                    return gr.update(value=text_str, visible=True)
-                
-                def export_text_wrapper(mcq_id):
-                    if not mcq_id:
-                        return gr.update(value="", visible=False)
-                    text_str = export_mcq_text(mcq_id)
-                    return gr.update(value=text_str, visible=True)
+                def export_all_wrapper(mcq_id):
+                    if mcq_id is None:
+                        return gr.update(value=None, visible=False)
+                    try:
+                        mcq_id = int(mcq_id)
+                        file_path = export_all_mcq(mcq_id)
+                        if file_path:
+                            return gr.update(value=file_path, visible=True)
+                        else:
+                            return gr.update(value=None, visible=False)
+                    except (ValueError, TypeError) as e:
+                        return gr.update(value=None, visible=False)
                 
                 def open_builder_wrapper(mcq_id):
                     if not mcq_id:
@@ -1909,28 +2003,10 @@ def create_interface():
                     outputs=[kb_detail_display, kb_triplet_display, kb_image_display, kb_image_status, kb_mcq_id_state]
                 )
                 
-                kb_copy_mcq_btn.click(
-                    fn=copy_mcq_wrapper,
+                kb_export_all_btn.click(
+                    fn=export_all_wrapper,
                     inputs=kb_mcq_id_state,
-                    outputs=kb_copy_display
-                )
-                
-                kb_copy_visual_btn.click(
-                    fn=copy_visual_wrapper,
-                    inputs=kb_mcq_id_state,
-                    outputs=kb_copy_display
-                )
-                
-                kb_export_text_btn.click(
-                    fn=export_text_wrapper,
-                    inputs=kb_mcq_id_state,
-                    outputs=kb_export_display
-                )
-                
-                kb_export_json_btn.click(
-                    fn=export_json_wrapper,
-                    inputs=kb_mcq_id_state,
-                    outputs=kb_export_display
+                    outputs=kb_export_file
                 )
                 
                 kb_open_builder_btn.click(

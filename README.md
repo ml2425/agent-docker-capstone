@@ -37,26 +37,29 @@ Behind the scenes:
 
 - **Tab 2 – MCQ Builder**
   - Dropdown lists every pending article (title + year + PMID/file ID).
-  - "Generate MCQ Draft" calls Gemini API directly to return:
+  - "Generate MCQ Draft (takes a few seconds)" calls Gemini API directly to return:
     - MCQ (stem/question/5 options/correct index)
     - Optimized visual prompt
     - Supporting SNOMED-style triplets (subject-action-object-relation)
+  - Button labels include timing expectations to manage user experience.
   - Reviewer feedback input allows regeneration with context.
   - "Accept MCQ" persists MCQ + triplets to database (removes article from pending queue).
   - Visual prompt can be edited before acceptance.
-  - "Generate Image" creates image from visual prompt (default 300x300).
-  - "Accept Image" saves image to `media/` folder and stores path in database.
+  - "Show Image" button: On-demand image generation (first click generates, second click loads, third click displays - Gradio quirk).
+  - Images are generated from visual prompts with configurable size (default aspect ratio, with local resizing if needed).
+  - Images saved to `media/` folder with paths stored in database.
+  - "Delete Image" button to remove images from storage.
 
 - **Tab 3 – Knowledge Base**
-  - Default view shows 10 most recent MCQs with pagination (Prev/Next).
+  - Default view shows 6 MCQs per page with pagination (Prev/Next).
   - Search by PMID, title, authors, year, filename, or question text.
-  - Click MCQ ID to view full details:
+  - Enter MCQ ID and click "View Details" to see:
     - Complete MCQ with options and correct answer
     - Source information (title, authors, year, PMID)
     - Associated SNOMED-style triplet with context sentences
     - Visual prompt
-    - Image thumbnail (if available)
-  - Export options: Copy as JSON or plain text.
+    - Image display (if available)
+  - Export All: Single button that downloads a comprehensive .txt file containing MCQ content, visual prompt, and image information (click twice to download - Gradio quirk).
   - "Open in Builder" adds source back to pending queue for editing.
 
 ## What’s Next

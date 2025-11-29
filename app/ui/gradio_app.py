@@ -994,14 +994,17 @@ def handle_accept_mcq(source_choice: str, visual_prompt: str) -> Tuple[str, Opti
             source_id=source.id,
             triplet_id=primary_triplet_id,
             visual_prompt=visual_prompt_text,
-            status="pending",
+            status="approved",  # Changed from "pending" to "approved" when user accepts
         )
         db.add(mcq)
+        
+        # Remove pending source in the same transaction
+        db.query(PendingSource).filter(PendingSource.source_id == source_id).delete()
+        
         db.commit()
         db.refresh(mcq)
 
         pending_mcq_cache.pop(source_id, None)
-        _remove_pending_source(source_id)
 
         return f"MCQ accepted and stored with ID {mcq.id}.", mcq.id
     finally:

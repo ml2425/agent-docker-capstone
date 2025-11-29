@@ -8,7 +8,6 @@ import time
 
 from app.core.llm_manager import llm_manager
 from app.agents.pipeline import set_pipeline_model, set_distractor_tool
-from app.agents.mcq_refinement import set_refinement_model
 
 
 runner = Runner(app=app, session_service=session_service)
@@ -35,11 +34,10 @@ async def run_agent(
     if session_id is None:
         session_id = await create_new_session(user_id)
     
-    # Apply the selected model across the pipeline and refinement loop.
+    # Apply the selected model across the pipeline.
     config = llm_manager.get_config(model_id)
     model = llm_manager.get_model(config.identifier)
     set_pipeline_model(model)
-    set_refinement_model(model)
     set_distractor_tool(config.provider)
     
     query_content = types.Content(
@@ -102,24 +100,4 @@ async def create_new_session(user_id: str = "default") -> str:
         return session_id
 
 
-async def restore_session(user_id: str, session_id: str):
-    """
-    Restore session state.
-    
-    Args:
-        user_id: User identifier
-        session_id: Session ID to restore
-    
-    Returns:
-        Session object or None
-    """
-    try:
-        session = await session_service.get_session(
-            app_name="MedicalMCQGenerator",
-            user_id=user_id,
-            session_id=session_id
-        )
-        return session
-    except Exception:
-        return None
 

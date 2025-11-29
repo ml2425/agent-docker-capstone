@@ -117,29 +117,3 @@ def query_triplets_for_distractors(
     
     return query.limit(10).all()
 
-
-def get_triplet_by_id(db: Session, triplet_id: int) -> Optional[Triplet]:
-    """Get triplet by ID."""
-    return db.query(Triplet).filter(Triplet.id == triplet_id).first()
-
-
-def update_triplet_status(db: Session, triplet_id: int, status: str) -> bool:
-    """
-    Update triplet status (pending, accepted, rejected).
-    
-    Args:
-        db: Database session
-        triplet_id: Triplet ID
-        status: New status
-    
-    Returns:
-        True if updated, False if not found
-    """
-    triplet = db.query(Triplet).filter(Triplet.id == triplet_id).first()
-    if not triplet:
-        return False
-    
-    triplet.status = status
-    db.commit()
-    return True
-

@@ -20,8 +20,6 @@ from app.services.pubmed_service import search_pubmed as pubmed_search_service
 from app.services.ingestion_service import register_pdf_source, register_pubmed_source
 from app.services.kb_service import (
     get_approved_triplets,
-    get_triplet_by_id,
-    update_triplet_status,
     upsert_triplet,
 )
 from app.db.database import SessionLocal, init_db
@@ -34,7 +32,6 @@ from app.services.gemini_image_service import (
 )
 from app.services.gemini_mcq_service import (
     generate_mcq_with_triplets,
-    regenerate_mcq_with_feedback,
     regenerate_mcq_with_loop_refinement,
 )
 from app.services.media_service import (
@@ -251,15 +248,6 @@ def _list_pending_sources(page: int = 1, page_size: int = 6) -> Tuple[List[Tuple
             .all()
         )
         return entries, total_pages
-    finally:
-        db.close()
-
-
-def _remove_pending_source(source_id: int) -> None:
-    db = SessionLocal()
-    try:
-        db.query(PendingSource).filter(PendingSource.source_id == source_id).delete()
-        db.commit()
     finally:
         db.close()
 
@@ -651,37 +639,6 @@ def handle_pdf_upload(file, model_id: str) -> str:
         return f"Error processing PDF: {e}"
 
 
-def refresh_ingested_sources() -> str:
-    """Refresh and display selected sources"""
-    db = SessionLocal()
-    try:
-        sources = db.query(Source).order_by(Source.created_at.desc()).limit(10).all()
-        
-        if not sources:
-            return "*No sources selected yet*"
-        
-        html = "### Selected Sources\n\n"
-        for source in sources:
-            source_type_label = "PubMed" if source.source_type == "pubmed" else "Upload"
-            total_triplets = db.query(Triplet).filter(Triplet.source_id == source.id).count()
-            accepted_triplets = db.query(Triplet).filter(
-                Triplet.source_id == source.id,
-                Triplet.status == "accepted"
-            ).count()
-            mcq_count = db.query(MCQRecord).filter(MCQRecord.source_id == source.id).count()
-            html += f"""
-**{source.title[:60]}...**
-- Type: {source_type_label}
-- ID: {source.source_id}
-- Triplets: {accepted_triplets}/{total_triplets} accepted
-- MCQs: {mcq_count} generated
----
-"""
-        return html
-    finally:
-        db.close()
-
-
 # ========== MCQ Review Handlers ==========
 
 def _parse_source_choice(choice: str) -> Optional[int]:
@@ -711,57 +668,6 @@ def load_articles_for_mcq_dropdown() -> Tuple[gr.Dropdown, str]:
             gr.update(choices=choices, value=choices[0], visible=True),
             f"Loaded {len(choices)} recent articles.",
         )
-    finally:
-        db.close()
-
-
-def load_mcqs_for_article_dropdown(source_choice: str) -> Tuple[str, gr.Dropdown]:
-    """Populate MCQ dropdown for a selected article."""
-    source_id = _parse_source_choice(source_choice)
-    if not source_id:
-        return "Select an article first.", gr.update(choices=[], value=None, visible=False)
-
-    db = SessionLocal()
-    try:
-        mcqs = (
-            db.query(MCQRecord)
-            .filter(MCQRecord.source_id == source_id)
-            .order_by(MCQRecord.created_at.desc())
-            .all()
-        )
-        if not mcqs:
-            return (
-                "No MCQs stored for this article yet.",
-                gr.update(choices=[], value=None, visible=False),
-            )
-
-        choices = [
-            f"{mcq.id} | MCQ {idx + 1}: {mcq.question[:60]}"
-            for idx, mcq in enumerate(mcqs)
-        ]
-        return (
-            f"Found {len(mcqs)} MCQs for this article.",
-            gr.update(choices=choices, value=choices[0], visible=True),
-        )
-    finally:
-        db.close()
-
-
-def handle_view_mcq(mcq_choice: str) -> Tuple[str, str, str, Optional[int]]:
-    """Display stored MCQ without regenerating."""
-    mcq_id = _parse_mcq_choice(mcq_choice)
-    if not mcq_id:
-        return "*Select an MCQ first*", "", "", None
-
-    db = SessionLocal()
-    try:
-        mcq = db.query(MCQRecord).filter(MCQRecord.id == mcq_id).first()
-        if not mcq:
-            return "MCQ not found.", "", "", None
-        source = db.query(Source).filter(Source.id == mcq.source_id).first()
-        triplet = db.query(Triplet).filter(Triplet.id == mcq.triplet_id).first()
-        html = format_original_mcq(mcq, source, triplet) if source and triplet else "MCQ data incomplete."
-        return html, mcq.visual_prompt or "", mcq.visual_triplet or "", mcq.id
     finally:
         db.close()
 
@@ -810,39 +716,6 @@ async def handle_regenerate_mcq(mcq_choice: str, model_id: str) -> Tuple[str, st
 
         html = format_original_mcq(mcq, source, triplet)
         return html, mcq.visual_prompt or "", mcq.visual_triplet or "", mcq.id
-    finally:
-        db.close()
-
-
-async def handle_generate_mcqs_for_article(source_choice: str, model_id: str) -> str:
-    """Trigger MCQ generation for all accepted triplets in an article."""
-    source_id = _parse_source_choice(source_choice)
-    if not source_id:
-        return "Select an article first."
-
-    db = SessionLocal()
-    try:
-        source = db.query(Source).filter(Source.id == source_id).first()
-        if not source:
-            return "Article not found."
-
-        accepted_triplets = (
-            db.query(Triplet)
-            .filter(Triplet.source_id == source.id, Triplet.status == "accepted")
-            .all()
-        )
-        if not accepted_triplets:
-            return "No accepted triplets for this article yet."
-
-        session_id = await get_or_create_session()
-        mcq_count, _ = await _auto_generate_mcqs_for_triplets(
-            db=db,
-            triplets=accepted_triplets,
-            source=source,
-            session_id=session_id,
-            model_id=model_id,
-        )
-        return f"Generated {mcq_count} MCQs for {source.source_id}."
     finally:
         db.close()
 
@@ -1210,129 +1083,6 @@ def get_mcq_detail(mcq_id: int) -> Tuple[str, str, Optional[gr.Image], str]:
         db.close()
 
 
-def export_mcq_json(mcq_id: int) -> str:
-    """Export MCQ as JSON."""
-    db = SessionLocal()
-    try:
-        result = (
-            db.query(MCQRecord, Source, Triplet)
-            .join(Source, MCQRecord.source_id == Source.id)
-            .outerjoin(Triplet, MCQRecord.triplet_id == Triplet.id)
-            .filter(MCQRecord.id == mcq_id)
-            .first()
-        )
-        
-        if not result:
-            return "MCQ not found."
-        
-        mcq, source, triplet = result
-        export_data = {
-            "mcq_id": mcq.id,
-            "source": {
-                "id": source.id,
-                "source_id": source.source_id,
-                "title": source.title,
-                "authors": source.authors,
-                "year": source.publication_year,
-            },
-            "stem": mcq.stem,
-            "question": mcq.question,
-            "options": json.loads(mcq.options),
-            "correct_option": mcq.correct_option,
-            "visual_prompt": mcq.visual_prompt,
-            "status": mcq.status,
-            "created_at": mcq.created_at.isoformat() if mcq.created_at else None,
-        }
-        
-        if triplet:
-            export_data["triplet"] = {
-                "subject": triplet.subject,
-                "action": triplet.action,
-                "object": triplet.object,
-                "relation": triplet.relation,
-                "context_sentences": _normalize_context_sentences(triplet.context_sentences),
-            }
-        
-        if mcq.image_url:
-            export_data["image_path"] = mcq.image_url
-        
-        return json.dumps(export_data, indent=2)
-    finally:
-        db.close()
-
-
-def export_mcq_text(mcq_id: int) -> str:
-    """Export MCQ as plain text."""
-    db = SessionLocal()
-    try:
-        result = (
-            db.query(MCQRecord, Source, Triplet)
-            .join(Source, MCQRecord.source_id == Source.id)
-            .outerjoin(Triplet, MCQRecord.triplet_id == Triplet.id)
-            .filter(MCQRecord.id == mcq_id)
-            .first()
-        )
-        
-        if not result:
-            return "MCQ not found."
-        
-        mcq, source, triplet = result
-        options = json.loads(mcq.options)
-        
-        lines = [
-            f"MCQ ID: {mcq.id}",
-            f"Source: {source.title or 'Untitled'} ({source.source_id})",
-            f"Authors: {source.authors or 'N/A'}",
-            f"Year: {source.publication_year or 'N/A'}",
-            "",
-            f"Stem: {mcq.stem}",
-            "",
-            f"Question: {mcq.question}",
-            "",
-            "Options:",
-        ]
-        for idx, opt in enumerate(options):
-            marker = " [CORRECT]" if idx == mcq.correct_option else ""
-            lines.append(f"  {chr(65+idx)}) {opt}{marker}")
-        
-        if triplet:
-            lines.extend([
-                "",
-                "Triplet:",
-                f"  Subject: {triplet.subject}",
-                f"  Action: {triplet.action}",
-                f"  Object: {triplet.object}",
-                f"  Relation: {triplet.relation}",
-            ])
-        
-        if mcq.visual_prompt:
-            lines.extend(["", f"Visual Prompt: {mcq.visual_prompt}"])
-        
-        if mcq.image_url:
-            lines.extend(["", f"Image: {mcq.image_url}"])
-        
-        return "\n".join(lines)
-    finally:
-        db.close()
-
-
-def copy_mcq_text(mcq_id: int) -> str:
-    """Return MCQ text formatted for easy copy-paste into Word."""
-    return export_mcq_text(mcq_id)
-
-
-def copy_visual_prompt(mcq_id: int) -> str:
-    """Return visual prompt text for easy copy-paste."""
-    db = SessionLocal()
-    try:
-        mcq = db.query(MCQRecord).filter(MCQRecord.id == mcq_id).first()
-        if not mcq:
-            return "MCQ not found."
-        return mcq.visual_prompt or "No visual prompt set."
-    finally:
-        db.close()
-
-
 def export_all_mcq(mcq_id: int) -> Optional[str]:
     """Export MCQ, visual prompt, and image info as a downloadable .txt file."""
     db = SessionLocal()
@@ -1509,68 +1259,6 @@ def format_original_mcq(mcq: MCQRecord, source: Source, triplet: Optional[Triple
     if triplet:
         html += f"- **Triplet:** {triplet.subject} → {triplet.action} → {triplet.object}\n"
     return html
-
-
-async def handle_request_update(update_request: str, mcq_id_state: int, model_id: str) -> str:
-    """Request MCQ update from LLM"""
-    if not update_request.strip():
-        return "*Please describe the update you want.*"
-    
-    if not mcq_id_state:
-        return "*Please generate an MCQ first*"
-    
-    try:
-        session_id = await get_or_create_session()
-        result = await run_agent(
-            new_message=f"Update MCQ {mcq_id_state} with the following changes: {update_request}",
-            user_id=DEFAULT_USER_ID,
-            session_id=session_id,
-            model_id=model_id,
-        )
-        
-        # Extract updated MCQ
-        updated_mcq = result.get("mcq_draft", {})
-        
-        # Format for display
-        db = SessionLocal()
-        try:
-            mcq = db.query(MCQRecord).filter(MCQRecord.id == mcq_id_state).first()
-            if not mcq:
-                return "MCQ not found."
-            
-            source = db.query(Source).filter(Source.id == mcq.source_id).first()
-            triplet = db.query(Triplet).filter(Triplet.id == mcq.triplet_id).first()
-            
-            options = updated_mcq.get("options", json.loads(mcq.options))
-            
-            html = f"""
-## Updated MCQ (LLM Generated)
-**Status:** Pending Review
-
-### Clinical Stem:
-{updated_mcq.get('stem', mcq.stem)}
-
-### Question:
-{updated_mcq.get('question', mcq.question)}
-
-### Options:
-"""
-            for i, option in enumerate(options, start=1):
-                marker = "(Correct) " if i - 1 == updated_mcq.get('correct_option', mcq.correct_option) else ""
-                html += f"{marker}{chr(64+i)}) {option}\n"
-            
-            html += f"""
-### Provenance:
-- **Title:** {source.title}
-- **Authors:** {source.authors or 'N/A'}
-- **Source ID:** {source.source_id}
-- **Triplet:** {triplet.subject} → {triplet.action} → {triplet.object}
-"""
-            return html
-        finally:
-            db.close()
-    except Exception as e:
-        return f"Error: {e}"
 
 
 def handle_show_image(mcq_id: Optional[int], model_id: Optional[str] = None) -> Tuple[gr.Image, str]:

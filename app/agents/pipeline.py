@@ -3,8 +3,7 @@ from google.adk.agents import Agent, SequentialAgent
 from google.adk.models.google_llm import Gemini
 from app.tools.pubmed_tools import pubmed_search_tool, pubmed_fetch_tool
 from app.tools.schema_validator import schema_validator_tool
-from app.tools.kb_tools import kb_query_tool, kb_get_approved_tool
-from app.tools.provenance_tools import provenance_verifier_tool
+from app.tools.kb_tools import kb_query_tool
 from app.tools.tavily_search import tavily_search_tool
 from google.adk.tools import google_search
 
@@ -225,10 +224,4 @@ def set_distractor_tool(provider: str) -> None:
     mcq_generation_agent.tools = tools
 
 
-def set_google_search_enabled(enabled: bool) -> None:
-    """Enable or disable Google Search tool for MCQ generation agent."""
-    tools = [kb_query_tool]
-    if enabled:
-        tools.append(google_search)
-    mcq_generation_agent.tools = tools
 

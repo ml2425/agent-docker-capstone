@@ -15,6 +15,7 @@ from google.adk.sessions import InMemorySessionService,
 from google.adk.runners import Runner,
 from google.adk.tools.tool_context import ToolContextfrom google.genai import types
 
+When working with LLMs, you may encounter transient errors like rate limits or temporary service unavailability. Retry optionsautomatically handle these failures by retrying the request with exponential backoff.retry_config = types.HttpRetryOptions(    attempts=5,  # Maximum retry attempts    exp_base=7,  # Delay multiplier    initial_delay=1,    http_status_codes=[429, 500, 503, 504],  # Retry on these HTTP errors)
 
 Agent powered by an LLM
 pythonagent = Agent(

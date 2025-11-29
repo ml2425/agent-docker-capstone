@@ -71,7 +71,7 @@ This project implements 5+ features from the Google Agent Development Kit framew
 
 1. **SequentialAgent Orchestration** - Pipeline of agents (SourceIngestionAgent → FactExtractionAgent → KBManagementAgent → MCQGenerationAgent → VisualRefinerAgent) defined in `app/agents/pipeline.py`. Each agent passes structured data via `output_key` for deterministic data handoff.
 
-2. **LoopAgent for MCQ Refinement** - Iterative refinement loop (Writer + Critic) defined in `app/agents/mcq_refinement.py`. Critic reviews MCQ quality, Refiner improves based on critique, exits when approved or max 3 iterations reached.
+2. **Custom Loop for MCQ Refinement (Google ADK Inspired)** - Custom iterative refinement loop inspired by Google ADK LoopAgent pattern, implemented in `app/services/gemini_mcq_service.py`. Provides flexibility for different LLM vendors (Gemini for critique, user's choice for improvement) and fine-grained control over each iteration with explicit error handling. LoopAgent structure defined in `app/agents/mcq_refinement.py` for reference.
 
 3. **DatabaseSessionService** - Persistent session management using `DatabaseSessionService` with SQLite. Sessions persist across app restarts with automatic restoration. Implemented in `app/core/session.py`.
 
@@ -147,7 +147,7 @@ The application uses a **hybrid approach** combining Google ADK for orchestratio
 
 3. **Google ADK** (Available for future workflows)
    - `app/agents/pipeline.py` contains SequentialAgent definitions
-   - `app/agents/mcq_refinement.py` contains LoopAgent for iterative refinement
+   - `app/agents/mcq_refinement.py` contains LoopAgent structure (for reference), with custom loop implementation in `app/services/gemini_mcq_service.py`
    - `app/core/runner.py` provides ADK runner integration
    - `app/core/app.py` configures context compaction
    - Used for future extensibility and complex orchestration needs
@@ -171,7 +171,7 @@ The application uses a **hybrid approach** combining Google ADK for orchestratio
 ┌──────────────────────▼──────────────────────────────────┐
 │              Agent Pipeline Layer                        │
 │  SequentialAgent: Source → Extract → KB → MCQ → Visual  │
-│  LoopAgent: MCQ Refinement (Writer + Critic)           │
+│  Custom Loop (ADK Inspired): MCQ Refinement            │
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
@@ -294,7 +294,7 @@ agent-capstone/
 ├── app/
 │   ├── agents/              # Google ADK agents (available for future use)
 │   │   ├── pipeline.py      # SequentialAgent pipeline definitions
-│   │   └── mcq_refinement.py # LoopAgent for refinement
+│   │   └── mcq_refinement.py # LoopAgent structure (reference)
 │   ├── core/                # Core configuration
 │   │   ├── app.py          # App with context compaction
 │   │   ├── session.py      # DatabaseSessionService
@@ -347,7 +347,7 @@ agent-capstone/
 
 ### Quality Assurance
 - **Schema Validation**: Triplets validated against medical ontology
-- **Automatic Refinement**: LoopAgent improves MCQs before human review
+- **Automatic Refinement**: Custom loop (Google ADK inspired) improves MCQs before human review
 - **Distractor Quality**: KB + Google Search ensures plausible distractors
 
 ### Session Management

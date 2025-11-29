@@ -10,16 +10,19 @@ class Source(Base):
     
     id: Mapped[int] = mapped_column(primary_key=True)
     source_id: Mapped[str] = mapped_column(String(256), unique=True)  # PubMed ID or filename
-    source_type: Mapped[str] = mapped_column(String(20))  # "pubmed" or "pdf"
+    source_type: Mapped[str] = mapped_column(String(20))  # "pubmed", "pdf", or "pdf_chunk"
     title: Mapped[str | None] = mapped_column(String(512))
     authors: Mapped[str | None] = mapped_column(String(512))
     publication_year: Mapped[int | None] = mapped_column(Integer)
-    content: Mapped[str] = mapped_column(Text)  # Abstract or PDF text
+    content: Mapped[str] = mapped_column(Text)  # Abstract or PDF chunk text
+    parent_source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), nullable=True)  # For PDF chunks
+    section_title: Mapped[str | None] = mapped_column(String(100), nullable=True)  # Section name for PDF chunks
     created_at: Mapped[DateTime] = mapped_column(DateTime, server_default=func.now())
     
     triplets: Mapped[list["Triplet"]] = relationship(back_populates="source")
     mcqs: Mapped[list["MCQRecord"]] = relationship(back_populates="source")
     pending_entries: Mapped[list["PendingSource"]] = relationship(back_populates="source")
+    parent_source: Mapped["Source"] = relationship("Source", remote_side=[id], backref="child_sources")
 
 
 class Triplet(Base):

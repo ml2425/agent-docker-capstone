@@ -81,6 +81,14 @@ def load_pending_articles_dropdown() -> Tuple[gr.Dropdown, str]:
             year = source.publication_year or "Year N/A"
             title = source.title or "Untitled"
             identifier = source.source_id
+            
+            # For PDF chunks, show parent PDF name and section
+            if source.source_type == "pdf_chunk" and source.parent_source_id:
+                parent = db.query(Source).filter(Source.id == source.parent_source_id).first()
+                if parent:
+                    section_info = f" [{source.section_title}]" if source.section_title else ""
+                    title = f"{parent.title}{section_info}"
+            
             choices.append(f"{source.id} | {identifier} | {title} ({year})")
 
         return (
@@ -274,10 +282,25 @@ def render_pending_sources(page: int = 1, page_size: int = 6) -> Tuple[str, int,
     for source, pending in entries:
         year = source.publication_year or "Year N/A"
         label = source.source_id
+        
+        # Show section info for PDF chunks
+        section_info = ""
+        if source.source_type == "pdf_chunk" and source.section_title:
+            section_info = f"\n- Section: {source.section_title}"
+            # Get parent PDF name if available
+            if source.parent_source_id:
+                db = SessionLocal()
+                try:
+                    parent = db.query(Source).filter(Source.id == source.parent_source_id).first()
+                    if parent:
+                        label = f"{parent.title} - {source.section_title}"
+                finally:
+                    db.close()
+        
         html_lines.append(
             f"**{source.title or 'Untitled'}**\n"
             f"- Year: {year}\n"
-            f"- Identifier: {label}\n"
+            f"- Identifier: {label}{section_info}\n"
             f"- Added: {pending.created_at}\n"
         )
     info = f"Page {page}/{total_pages}"
@@ -598,21 +621,33 @@ def handle_pdf_upload(file, model_id: str) -> str:
         with open(file.name, 'rb') as f:
             pdf_bytes = f.read()
         
-        # Register PDF source
+        # Register PDF source (creates parent + chunks)
         db = SessionLocal()
         try:
             source_dict = register_pdf_source(file.name, pdf_bytes, db)
-            source = db.query(Source).filter(Source.id == source_dict["id"]).first()
-            if not source:
+            parent_source = db.query(Source).filter(Source.id == source_dict["id"]).first()
+            if not parent_source:
                 return "Failed to register PDF source."
 
-            _ensure_pending_source(db, source)
-            pending_mcq_cache.pop(source.id, None)
-            return f"PDF queued for MCQ review: {source.title or source.source_id}"
+            # Add all chunk sources to pending queue (not the parent)
+            chunk_sources = db.query(Source).filter(
+                Source.parent_source_id == parent_source.id
+            ).all()
+            
+            chunks_added = 0
+            for chunk_source in chunk_sources:
+                _ensure_pending_source(db, chunk_source)
+                pending_mcq_cache.pop(chunk_source.id, None)
+                chunks_added += 1
+            
+            if chunks_added > 0:
+                return f"PDF processed: {chunks_added} section(s) queued for MCQ review from '{parent_source.title or parent_source.source_id}'"
+            else:
+                return f"PDF processed but no sections found: {parent_source.title or parent_source.source_id}"
         finally:
             db.close()
     except Exception as e:
-        return f"Error selecting PDF: {e}"
+        return f"Error processing PDF: {e}"
 
 
 def refresh_ingested_sources() -> str:

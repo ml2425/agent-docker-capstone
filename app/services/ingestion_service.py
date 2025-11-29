@@ -1,35 +1,15 @@
 """PDF ingestion and text extraction service."""
-from pypdf import PdfReader
-from io import BytesIO
 from typing import Dict
 from sqlalchemy.orm import Session
 from app.db.models import Source
 import hashlib
-
-
-def extract_pdf_text(pdf_bytes: bytes) -> str:
-    """
-    Extract text from PDF bytes.
-    
-    Args:
-        pdf_bytes: PDF file content as bytes
-    
-    Returns:
-        Extracted text string
-    """
-    try:
-        reader = PdfReader(BytesIO(pdf_bytes))
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-        return text.strip()
-    except Exception as e:
-        raise ValueError(f"Failed to extract PDF text: {e}")
+from app.services.pdf_section_parser import chunk_pdf_by_sections
 
 
 def register_pdf_source(filename: str, pdf_bytes: bytes, db: Session) -> Dict:
     """
-    Register uploaded PDF as source in database.
+    Register PDF by creating parent source + chunk sources.
+    Each chunk becomes a separate Source (like PubMed abstracts).
     
     Args:
         filename: Original PDF filename
@@ -37,42 +17,76 @@ def register_pdf_source(filename: str, pdf_bytes: bytes, db: Session) -> Dict:
         db: Database session
     
     Returns:
-        Dict with source information
+        Dict with parent source information and chunk count
     """
-    # Extract text
-    content = extract_pdf_text(pdf_bytes)
+    # Generate parent source_id from filename hash
+    parent_source_id = f"pdf_{hashlib.md5(filename.encode()).hexdigest()[:8]}"
     
-    # Generate source_id from filename hash
-    source_id = f"pdf_{hashlib.md5(filename.encode()).hexdigest()[:8]}"
+    # Check if parent already exists
+    existing_parent = db.query(Source).filter(
+        Source.source_id == parent_source_id,
+        Source.parent_source_id.is_(None)  # Only check parent, not chunks
+    ).first()
     
-    # Check if source already exists
-    existing = db.query(Source).filter(Source.source_id == source_id).first()
-    if existing:
+    if existing_parent:
+        # Count existing chunks
+        chunk_count = db.query(Source).filter(
+            Source.parent_source_id == existing_parent.id
+        ).count()
         return {
-            "source_id": existing.source_id,
-            "title": existing.title,
-            "content": existing.content,
+            "source_id": existing_parent.source_id,
+            "title": existing_parent.title,
             "type": "pdf",
-            "id": existing.id
+            "id": existing_parent.id,
+            "chunks_created": chunk_count
         }
     
-    # Create source record
-    source = Source(
-        source_id=source_id,
+    # Chunk PDF into sections
+    chunks = chunk_pdf_by_sections(pdf_bytes, filename)
+    
+    # Create parent source (for reference, doesn't store content)
+    parent_source = Source(
+        source_id=parent_source_id,
         source_type="pdf",
         title=filename,
-        content=content
+        content="",  # Parent doesn't store content, chunks do
+        parent_source_id=None,
+        section_title=None
     )
-    db.add(source)
+    db.add(parent_source)
     db.commit()
-    db.refresh(source)
+    db.refresh(parent_source)
+    
+    # Create chunk sources (each like a PubMed abstract)
+    chunk_sources = []
+    for chunk in chunks:
+        chunk_source_id = f"{parent_source_id}_chunk_{chunk['order']}"
+        
+        # Check if chunk already exists
+        existing_chunk = db.query(Source).filter(Source.source_id == chunk_source_id).first()
+        if existing_chunk:
+            chunk_sources.append(existing_chunk)
+            continue
+        
+        chunk_source = Source(
+            source_id=chunk_source_id,
+            source_type="pdf_chunk",
+            title=f"{filename} - {chunk['section_title']}",
+            content=chunk['content'],  # This is what MCQ generation uses
+            parent_source_id=parent_source.id,
+            section_title=chunk['section_title'],
+        )
+        db.add(chunk_source)
+        chunk_sources.append(chunk_source)
+    
+    db.commit()
     
     return {
-        "source_id": source_id,
+        "source_id": parent_source_id,
         "title": filename,
-        "content": content,
         "type": "pdf",
-        "id": source.id
+        "id": parent_source.id,
+        "chunks_created": len(chunk_sources)
     }
 
 

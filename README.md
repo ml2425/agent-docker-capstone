@@ -106,21 +106,6 @@ The Gradio UI loads at `http://localhost:7860`.
 - `app/db/models.py` – Source, triplet, pending queue, MCQ schema.
 - `plan/docs/implementation_plan.md` – Technical roadmap (kept in sync).
 
-## FAQ
-
-**Why no auto-triplet extraction anymore?**  
-Speed + control. Reviewers wanted to pick one article, generate one MCQ, and iterate without waiting for the entire search result to finish. The pending queue gives instant feedback and defers heavy LLM calls to the builder tab.
-
-**Where do the triplets show up?**  
-Right now they’re displayed as markdown next to the MCQ draft (and stored automatically when you accept). Future work will add a richer transparency view.
-
-**What if I want the old auto-mode back?**  
-The legacy ADK flow is still documented in `plan/docs/implementation_plan.md`. We can re-enable it later, but the current prototype focuses on predictability and reviewer-driven actions.
-
----
-
-Questions or ideas? Drop them in the issue tracker and reference the relevant tab/flow so we can keep iterating quickly.
-
 ## Tech Stack
 
 ### Core Framework
@@ -376,21 +361,7 @@ agent-capstone/
 - **Provider-Agnostic Services**: MCQ and image services route to appropriate API based on model_id
 - **Centralized control**: `LLMManager` manages model configurations and fallbacks
 
-## Testing
 
-### Backend Testing (Without UI)
-
-Run automated tests:
-```bash
-python test_backend.py
-```
-
-Interactive CLI for testing agents:
-```bash
-python test_agents_cli.py
-```
-
-**Note:** Test files are excluded from git (see `.gitignore`).
 
 ## Development
 

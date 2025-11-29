@@ -17,6 +17,17 @@ from PIL import Image
 DEFAULT_IMAGE_SIZE = os.getenv("GEMINI_IMAGE_DEFAULT_SIZE", "512x512")
 IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 
+# Retry config for image generation (1 initial call + 1 retry = 2 attempts max)
+# Only retry on genuine server errors, NOT rate limits (429) or connection issues
+_IMAGE_RETRY_CONFIG = types.HttpRetryOptions(
+    attempts=2,  # 1 initial + 1 retry
+    exp_base=2,  # Not used with only 1 retry, but set for consistency
+    initial_delay=2,  # 2 second delay before retry
+    http_status_codes=[500, 503, 504],  # Only retry on server errors (500, 503, 504)
+    # Excluded: 429 (rate limit - don't retry, wastes quota)
+    # Excluded: Connection errors handled by exception handling
+)
+
 
 @dataclass
 class GeminiImageResult:
@@ -182,6 +193,7 @@ def generate_image_from_prompt(prompt: str, size: Optional[str] = None, model_id
                 config=types.GenerateContentConfig(
                     response_modalities=["IMAGE"],
                     image_config=image_config,
+                    http_retry_options=_IMAGE_RETRY_CONFIG,
                 ),
             )
             image_bytes = _extract_image_bytes(response)

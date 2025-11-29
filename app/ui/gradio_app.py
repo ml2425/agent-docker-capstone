@@ -1937,6 +1937,7 @@ def create_interface():
                         )
                         kb_search_btn = gr.Button("Search", variant="primary")
                         kb_clear_btn = gr.Button("Clear Search", variant="secondary")
+                        kb_refresh_btn = gr.Button("🔄 Refresh List", variant="secondary")
                         
                         gr.Markdown("---")
                         gr.Markdown("### MCQ List")
@@ -2027,6 +2028,11 @@ def create_interface():
                 kb_clear_btn.click(
                     fn=clear_search_wrapper,
                     outputs=[kb_list_display, kb_page_state, kb_info, kb_search_input]
+                )
+                
+                kb_refresh_btn.click(
+                    fn=lambda: render_kb_list(1, None),
+                    outputs=[kb_list_display, kb_page_state, kb_info]
                 )
                 
                 kb_prev_btn.click(

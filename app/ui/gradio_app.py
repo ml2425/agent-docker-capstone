@@ -35,6 +35,7 @@ from app.services.gemini_image_service import (
 from app.services.gemini_mcq_service import (
     generate_mcq_with_triplets,
     regenerate_mcq_with_feedback,
+    regenerate_mcq_with_loop_refinement,
 )
 from app.services.media_service import (
     save_image,
@@ -888,7 +889,7 @@ def generate_mcq_for_pending_article(source_choice: str, model_id: str) -> Tuple
 
 
 def apply_mcq_feedback(source_choice: str, feedback: str, model_id: str) -> Tuple[str, str, str]:
-    """Regenerate MCQ draft with reviewer feedback."""
+    """Regenerate MCQ draft with reviewer feedback using LoopAgent refinement."""
     source_id = _parse_source_choice(source_choice)
     if not source_id:
         return "*Select a pending article first.*", "", ""
@@ -908,7 +909,16 @@ def apply_mcq_feedback(source_choice: str, feedback: str, model_id: str) -> Tupl
             "triplets": pending_mcq_cache.get(source_id, {}).get("triplets", []),
             "visual_prompt": pending_mcq_cache.get(source_id, {}).get("visual", {}).get("optimized_visual_prompt", ""),
         }
-        result = regenerate_mcq_with_feedback(article_payload, regen_payload, feedback, model_id=model_id)
+        
+        # Use LoopAgent refinement (falls back to direct feedback if LoopAgent fails early)
+        result = regenerate_mcq_with_loop_refinement(
+            article_payload, 
+            regen_payload, 
+            feedback, 
+            model_id=model_id,
+            max_iterations=2
+        )
+        
         if not result.success or not result.payload:
             return result.message or "MCQ regeneration failed. Please retry.", "", ""
 
@@ -1788,7 +1798,7 @@ def create_interface():
                             placeholder="Optional instructions for refinement",
                             lines=2
                         )
-                        apply_feedback_btn = gr.Button("Apply Feedback", variant="secondary")
+                        apply_feedback_btn = gr.Button("Apply Feedback (refinement may take a few seconds)", variant="secondary")
                         accept_mcq_btn = gr.Button("Accept MCQ", variant="primary")
 
                         mcq_display = gr.Markdown(value="*Generate an MCQ draft to begin.*", elem_id="mcq_preview")

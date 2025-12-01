@@ -6,6 +6,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy schema file first (explicitly, to ensure it's included)
+COPY plan/schema/schema.yaml plan/schema/schema.yaml
+
 # Copy application code
 COPY . .
 

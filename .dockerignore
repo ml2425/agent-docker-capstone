@@ -21,15 +21,7 @@ env/
 media/
 
 # Documentation/planning
-# Exclude most of plan/, but keep schema for app
-plan/docs/
-plan/app/
-plan/framework/
-plan/UI/
-plan/submission_description.md
-plan/schema/schema_examples.md
-# Explicitly include plan/schema/schema.yaml (override any exclusions)
-!plan/schema/schema.yaml
+plan/
 MERGE.md
 README.md
 *.md

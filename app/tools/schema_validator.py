@@ -7,7 +7,7 @@ import os
 # Load schema
 SCHEMA_PATH = os.path.join(
     os.path.dirname(__file__), 
-    "../../plan/schema/schema.yaml"
+    "../schema/schema.yaml"
 )
 
 with open(SCHEMA_PATH, 'r') as f:

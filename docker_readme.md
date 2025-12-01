@@ -112,20 +112,78 @@ Note: In containerized deployments, databases are ephemeral (created fresh on ea
 
 1. Google Cloud Project with billing enabled
 2. Cloud Run API enabled
-3. `gcloud` CLI installed and authenticated
+3. Cloud Build API enabled
+4. Artifact Registry API enabled (for image storage)
 
-### Build and Push to Container Registry
+### Method 1: Build and Push Using Cloud Shell (Recommended)
+
+This method uses Google Cloud Shell (browser-based) and doesn't require local Docker or gcloud CLI installation.
+
+#### Step 1: Open Cloud Shell
+
+1. Go to: https://shell.cloud.google.com
+2. Cloud Shell opens in your browser (free to use)
+
+#### Step 2: Clone Your Repository
+
+```bash
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
+cd YOUR_REPO
+git checkout docker-deployment  # or main, depending on your branch
+```
+
+#### Step 3: Create Artifact Registry Repository (One-Time Setup)
+
+```bash
+# Set your project
+gcloud config set project YOUR_PROJECT_ID
+
+# Create repository
+gcloud artifacts repositories create mcq-repo \
+  --repository-format=docker \
+  --location=us-central1 \
+  --description="MCQ Generator Docker images"
+```
+
+#### Step 4: Build and Push Image
+
+```bash
+# Build and push in one command (uses Cloud Build)
+gcloud builds submit --tag us-central1-docker.pkg.dev/YOUR_PROJECT_ID/mcq-repo/mcq-generator:latest .
+```
+
+This command:
+- Builds the Docker image using Cloud Build
+- Pushes it to Artifact Registry
+- Takes 5-10 minutes for first build
+
+#### Step 5: Deploy from Image in Cloud Run Console
+
+1. Go to [Cloud Run Console](https://console.cloud.google.com/run)
+2. Click "Create Service" (or edit existing service)
+3. Select **"Deploy one revision from an existing container image"**
+4. Enter image URL: `us-central1-docker.pkg.dev/YOUR_PROJECT_ID/mcq-repo/mcq-generator:latest`
+5. Continue with configuration (see "Deploy via Console" section below)
+
+### Method 2: Build Locally and Push (Alternative)
+
+If you prefer to build locally:
 
 ```bash
 # Set your project ID
 export PROJECT_ID=your-project-id
 
-# Build and tag
-docker build -t gcr.io/$PROJECT_ID/mcq-generator:latest .
+# Authenticate Docker with Artifact Registry
+gcloud auth configure-docker us-central1-docker.pkg.dev
 
-# Push to Google Container Registry
-docker push gcr.io/$PROJECT_ID/mcq-generator:latest
+# Build locally
+docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/mcq-repo/mcq-generator:latest .
+
+# Push to Artifact Registry
+docker push us-central1-docker.pkg.dev/$PROJECT_ID/mcq-repo/mcq-generator:latest
 ```
+
+**Note**: Requires Docker Desktop running and gcloud CLI installed locally.
 
 ### Deploy to Cloud Run
 
@@ -144,23 +202,31 @@ gcloud run deploy mcq-generator \
 ### Deploy via Console
 
 1. Go to [Cloud Run Console](https://console.cloud.google.com/run)
-2. Click "Create Service"
-3. Select "Deploy one revision from an existing container image"
-4. Enter image URL: `gcr.io/YOUR_PROJECT_ID/mcq-generator:latest`
+2. Click "Create Service" (or "EDIT & DEPLOY NEW REVISION" for existing service)
+3. Select **"Deploy one revision from an existing container image"**
+4. Enter image URL: `us-central1-docker.pkg.dev/YOUR_PROJECT_ID/mcq-repo/mcq-generator:latest`
+   - Replace `YOUR_PROJECT_ID` with your actual project ID
+   - Replace `us-central1` with your region if different
 5. Configure:
    - **Service name**: `mcq-generator`
-   - **Region**: Choose your region
+   - **Region**: Choose your region (e.g., `us-central1`, `europe-west1`)
    - **Authentication**: Allow unauthenticated invocations (for public access)
 6. Under "Variables & Secrets" tab:
+   - Click "ADD VARIABLE"
    - Add environment variables:
-     - `GEMINI_API_KEY`: Your Gemini API key
+     - `GEMINI_API_KEY`: Your Gemini API key (required)
+     - `PORT`: `8080` (optional - Cloud Run sets this automatically)
      - `OPENAI_API_KEY`: Your OpenAI API key (optional)
      - `TAVILY_API_KEY`: Your Tavily key (optional)
+     - `NCBI_EMAIL`: Your email for PubMed (optional)
 7. Under "Container" tab:
    - **Port**: 8080 (Cloud Run sets `$PORT` automatically)
-   - **Memory**: 1 GiB (recommended minimum)
-   - **CPU**: 1 (can be reduced to save costs)
-8. Click "Create"
+   - **Memory**: 1 GiB (recommended minimum, can use 512 MiB for cost savings)
+   - **CPU**: 1 (can be reduced to 0.5 to save costs)
+   - **Startup timeout**: 240 seconds (maximum allowed)
+   - **Min instances**: 0 (scales to zero when idle - saves costs)
+   - **Max instances**: 2-10 (adjust based on expected traffic)
+8. Click "CREATE" (or "DEPLOY" for existing service)
 
 ### Access Your Deployed Service
 
@@ -283,11 +349,32 @@ docker stop mcq-port-test && docker rm mcq-port-test
 
 ### Container Won't Start
 
-1. Check logs: `docker logs <container_name>`
-2. Verify environment variables are set
-3. Ensure port is not already in use: `docker ps`
+1. Check logs: `docker logs <container_name>` (for local testing)
+2. For Cloud Run: Check logs in Cloud Run → Your service → LOGS tab
+3. Verify environment variables are set correctly
+4. Ensure port is not already in use: `docker ps`
 
-### Application Not Accessible
+### Application Not Accessible (503 Service Unavailable)
+
+1. **Check Cloud Run logs** for Python errors or tracebacks
+2. **Verify environment variables** are set (especially `GEMINI_API_KEY`)
+3. **Increase startup timeout** to 240 seconds (maximum)
+4. **Check revision status** - should show "Ready" not "Not Ready"
+5. Common issues:
+   - Missing API keys causing app crash
+   - Import errors (check logs)
+   - Database initialization errors
+   - Port binding issues
+
+### FileNotFoundError for Schema File
+
+If you see: `FileNotFoundError: .../schema/schema.yaml`
+
+- **Solution**: Schema file is now in `app/schema/schema.yaml` (moved from `plan/schema/`)
+- The file is automatically included when building from `app/` directory
+- No special configuration needed - it's part of the application code
+
+### Application Not Accessible (Local)
 
 1. Verify `server_name="0.0.0.0"` in `app.py` (already configured)
 2. Check port mapping: `-p HOST_PORT:CONTAINER_PORT`
@@ -301,9 +388,10 @@ docker stop mcq-port-test && docker rm mcq-port-test
 
 ### API Key Errors
 
-- Verify environment variables are set correctly
+- Verify environment variables are set correctly in Cloud Run console
 - Check API key format (no extra spaces or quotes)
 - Ensure API keys have proper permissions
+- For Cloud Run: Use "Variables & Secrets" tab, not "Secrets" tab
 
 ## Security Best Practices
 
@@ -317,10 +405,19 @@ docker stop mcq-port-test && docker rm mcq-port-test
 
 - The container uses ephemeral storage: databases and media files are created fresh on each container start
 - This is suitable for demos and competition submissions
+- **Schema file location**: The schema file (`schema.yaml`) is located in `app/schema/` directory and is automatically included in the Docker image as part of the application code
 - For production with data persistence, consider:
   - Volume mounts for databases
   - Cloud storage for media files
   - External database services (PostgreSQL, etc.)
+
+## Recommended Deployment Method
+
+**For Cloud Run deployment, use Method 1 (Cloud Shell)** as described above:
+- No local Docker or gcloud CLI installation required
+- Uses Cloud Build (free tier: 120 build-minutes/day)
+- Most reliable method for first-time deployment
+- Browser-based, works from any computer
 
 ## Support
 

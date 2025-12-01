@@ -28,7 +28,8 @@ plan/framework/
 plan/UI/
 plan/submission_description.md
 plan/schema/schema_examples.md
-# Keep plan/schema/schema.yaml (include in Docker)
+# Explicitly include plan/schema/schema.yaml (override any exclusions)
+!plan/schema/schema.yaml
 MERGE.md
 README.md
 *.md
